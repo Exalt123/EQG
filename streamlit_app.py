@@ -783,10 +783,12 @@ with st.sidebar:
         spreadsheet_id = st.text_input("Spreadsheet ID", value="13wQEWzY7oxtHQX6wAeXn2G6f9Tp4fVBiYBA7Tw2u5aA")
         
         st.subheader("Sheet Configuration")
-        actual_sheets_tab = st.text_input("Actual Sheets Tab", value="Actual Sheets", 
-                                         help="Tab name with actual sheet inventory")
-        proposed_sheets_tab = st.text_input("Proposed Sheets Tab", value="Proposed Sheets",
-                                           help="Tab name with available sheet types to purchase")
+        sheet_tab_name = st.text_input("Sheet Tab Name", value="Sheet1", 
+                                       help="Name of the tab in your Google Sheet containing the material data")
+        
+        st.info("💡 **Tip:** The app will automatically distinguish between:\n"
+                "• **Actual sheets** (drop pieces with 'X' in drop column, or status='Available' with quantity > 0)\n"
+                "• **Proposed sheets** (full sheets without 'X' in drop column)")
 
 # Main interface
 st.header("📋 Job and Piece Input")
@@ -896,15 +898,38 @@ if st.session_state.pieces_list:
                 if not client:
                     st.error("Failed to connect to Google Sheets")
                 else:
-                    # Fetch actual sheets
-                    actual_sheets_data = []
-                    if sheet_mode in ["Actual", "Both"]:
-                        actual_sheets_data = fetch_sheet_data(client, spreadsheet_id, actual_sheets_tab, credentials_json)
+                    # Fetch data from the single sheet tab
+                    all_sheets_data = fetch_sheet_data(client, spreadsheet_id, sheet_tab_name, credentials_json)
                     
-                    # Fetch proposed sheets
+                    # Separate into actual and proposed based on data
+                    actual_sheets_data = []
                     proposed_sheets_data = []
-                    if sheet_mode in ["Proposed", "Both"]:
-                        proposed_sheets_data = fetch_sheet_data(client, spreadsheet_id, proposed_sheets_tab, credentials_json)
+                    
+                    for row in all_sheets_data:
+                        # Check if it's a drop piece (has 'X' in drop column)
+                        drop_value = str(row.get('drop', '') or '').strip().upper()
+                        is_drop = drop_value in ['X', 'Y', 'YES', 'TRUE', '1']
+                        
+                        # Check status and quantity
+                        status = str(row.get('status', 'Available')).strip().upper()
+                        quantity = int(safe_float(row.get('quantity') or row.get('qty'), 0))
+                        is_available = status in ['AVAILABLE', 'AVAIL', 'YES', 'Y', 'TRUE', '1', 'AV'] and quantity > 0
+                        
+                        # Actual sheets: drop pieces OR available sheets with quantity > 0
+                        if is_drop or is_available:
+                            actual_sheets_data.append(row)
+                        
+                        # Proposed sheets: all non-drop sheets (can be purchased as full sheets)
+                        # Include even if currently unavailable, as they can be proposed for purchase
+                        if not is_drop:
+                            proposed_sheets_data.append(row)
+                    
+                    # Filter based on sheet_mode selection
+                    if sheet_mode == "Actual":
+                        proposed_sheets_data = []  # Don't use proposed if only Actual selected
+                    elif sheet_mode == "Proposed":
+                        actual_sheets_data = []  # Don't use actual if only Proposed selected
+                    # If "Both", use both lists as is
                     
                     # Convert to Sheet objects
                     available_sheets = []
@@ -1003,22 +1028,28 @@ if st.session_state.pieces_list:
                     
                     if not available_sheets:
                         # Provide more helpful error message
+                        # Provide more helpful error message
                         error_details = []
+                        if not all_sheets_data:
+                            error_details.append(f"• No data found in '{sheet_tab_name}' tab")
+                        else:
+                            error_details.append(f"• Found {len(all_sheets_data)} total rows in '{sheet_tab_name}' tab")
+                            
                         if sheet_mode in ["Actual", "Both"]:
                             if not actual_sheets_data:
-                                error_details.append(f"• No data found in '{actual_sheets_tab}' tab")
+                                error_details.append(f"• No actual sheets found (check 'drop' column and status/quantity)")
                             else:
-                                error_details.append(f"• Found {len(actual_sheets_data)} rows in '{actual_sheets_tab}' but none matched criteria")
+                                error_details.append(f"• Found {len(actual_sheets_data)} actual sheets but none matched criteria")
                         if sheet_mode in ["Proposed", "Both"]:
                             if not proposed_sheets_data:
-                                error_details.append(f"• No data found in '{proposed_sheets_tab}' tab")
+                                error_details.append(f"• No proposed sheets found (full sheets without 'X' in drop column)")
                             else:
-                                error_details.append(f"• Found {len(proposed_sheets_data)} rows in '{proposed_sheets_tab}' but none matched criteria")
+                                error_details.append(f"• Found {len(proposed_sheets_data)} proposed sheets but none matched criteria")
                         
-                        st.error("No sheets found. Check your sheet tabs and data structure.")
+                        st.error("No sheets found. Check your sheet tab and data structure.")
                         if error_details:
                             st.info("Details:\n" + "\n".join(error_details))
-                            st.info("Make sure your sheets have:\n• Correct column headers (part_number, sheet_width, sheet_length, etc.)\n• Status = 'Available' and quantity > 0\n• Valid dimensions (width and height > 0)")
+                            st.info("Make sure your sheet has:\n• Correct column headers (part_number, sheet_width, sheet_length, etc.)\n• For actual sheets: 'drop' column with 'X' OR status = 'Available'/'Av' with quantity > 0\n• For proposed sheets: rows without 'X' in drop column (full sheets)\n• Valid dimensions (sheet_width and sheet_length > 0)")
                     else:
                         # Optimize
                         use_actual = sheet_mode in ["Actual", "Both"]
@@ -1274,19 +1305,21 @@ with st.expander("ℹ️ How to Use"):
     st.markdown("""
     ### Google Sheet Structure
     
-    **Actual Sheets Tab** should have columns:
-    - `sheet_id` or `id`: Unique identifier
+    **Your Sheet Tab** should have these columns:
+    - `part_number` or `sheet_id`: Unique identifier for the sheet
+    - `description`: Description of the material (optional)
     - `sheet_width` or `width`: Sheet width in inches
     - `sheet_length` or `height`: Sheet height in inches
-    - `thickness`: Material thickness (optional)
+    - `thickness`: Material thickness (decimal, e.g., 0.1875)
     - `cost` or `cost_per_sheet`: Cost per sheet
-    - `status`: "Available", "Used", or "Repurchased"
+    - `drop`: Put "X" in this column if it's a drop piece (leftover)
+    - `quantity`: Number of sheets available in inventory (0 = unavailable)
+    - `status`: "Available" or "Av" for available, "Unavailable" or "Ur" for unavailable
+    - `substitute`: (Optional) Part number of a substitute material if this one is unavailable
     
-    **Proposed Sheets Tab** should have columns:
-    - `sheet_width` or `width`: Sheet width in inches
-    - `sheet_length` or `height`: Sheet height in inches
-    - `thickness`: Material thickness (optional)
-    - `cost_per_sheet` or `cost`: Cost per sheet
+    **How it works:**
+    - **Actual sheets**: Rows with "X" in the `drop` column, OR rows with `status`="Available" and `quantity` > 0
+    - **Proposed sheets**: All rows (representing full sheets that can be purchased)
     
     ### Usage Flow
     1. Configure Google Sheets credentials
