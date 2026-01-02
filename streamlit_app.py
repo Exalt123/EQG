@@ -32,9 +32,10 @@ class Sheet:
     height: float = 0
     thickness: Optional[float] = None
     cost: float = 0
+    quantity: int = 1  # How many of this sheet are available (critical for optimization)
     is_actual: bool = False  # True for actual sheets, False for proposed
-    is_drop: bool = False  # True if this is a drop piece (marked with X in "Drop on Drop Output")
-    status: str = "Available"  # Available, Used, Repurchased
+    is_drop: bool = False  # True if this is a drop piece (marked with X in "drop" column)
+    status: str = "Available"  # Available or Unavailable
     used_pieces: List[Tuple[float, float]] = None  # Already used areas on the sheet
     
     def __post_init__(self):
@@ -42,6 +43,76 @@ class Sheet:
             self.used_pieces = []
 
 # --- HELPER FUNCTIONS ---
+def get_thickness_fractions():
+    """Generate list of common thickness fractions in 32nds (like tape measure)."""
+    # Common fractions in 32nds up to 1 inch
+    common_fractions = [
+        (1, 32), (1, 16), (3, 32), (1, 8), (5, 32), (3, 16), (7, 32), (1, 4),
+        (9, 32), (5, 16), (11, 32), (3, 8), (13, 32), (7, 16), (15, 32), (1, 2),
+        (17, 32), (9, 16), (19, 32), (5, 8), (21, 32), (11, 16), (23, 32), (3, 4),
+        (25, 32), (13, 16), (27, 32), (7, 8), (29, 32), (15, 16), (31, 32), (1, 1)
+    ]
+    
+    fractions_dict = {}
+    for num, denom in common_fractions:
+        decimal = num / denom
+        # Simplify if possible (e.g., 2/4 -> 1/2)
+        g = math.gcd(num, denom)
+        simple_num = num // g
+        simple_denom = denom // g
+        display = f"{simple_num}/{simple_denom}" if simple_num != simple_denom else "1"
+        # Only keep if not duplicate (prefer simplified versions)
+        if decimal not in fractions_dict or len(display) < len(fractions_dict[decimal]):
+            fractions_dict[decimal] = display
+    
+    # Convert to list and sort by decimal value
+    fractions_list = [{'display': v, 'decimal': k} for k, v in sorted(fractions_dict.items())]
+    return fractions_list
+
+def decimal_to_fraction(decimal_value, fractions_list=None):
+    """Convert decimal to closest fraction from list."""
+    if decimal_value is None:
+        return None
+    if fractions_list is None:
+        fractions_list = get_thickness_fractions()
+    
+    # Find closest fraction
+    closest = None
+    min_diff = float('inf')
+    for frac in fractions_list:
+        diff = abs(frac['decimal'] - decimal_value)
+        if diff < min_diff:
+            min_diff = diff
+            closest = frac
+    
+    # If very close match (within 0.001), return it
+    if closest and min_diff < 0.001:
+        return closest['display']
+    # Otherwise return decimal rounded to 4 places
+    return f"{decimal_value:.4f}"
+
+def fraction_to_decimal(fraction_str):
+    """Convert fraction string (e.g., '1/4', '7/32') to decimal."""
+    if not fraction_str or fraction_str.strip() == '':
+        return None
+    fraction_str = str(fraction_str).strip()
+    
+    # If it's already a decimal number
+    try:
+        return float(fraction_str)
+    except ValueError:
+        pass
+    
+    # Try to parse as fraction
+    if '/' in fraction_str:
+        try:
+            numerator, denominator = fraction_str.split('/')
+            return float(numerator) / float(denominator)
+        except (ValueError, ZeroDivisionError):
+            return None
+    
+    return None
+
 def safe_float(value, default=0.0):
     """Safely convert value to float, return default if conversion fails."""
     if value is None:
@@ -258,60 +329,95 @@ def optimize_cutting(pieces: List[Piece], available_sheets: List[Sheet], use_act
     # Track remaining quantities needed
     remaining = {i: piece.quantity for i, piece in enumerate(pieces)}
     
+    # Track sheet usage count (how many times each part_number has been used)
+    sheet_usage_count = {}
+    for sheet in actual_sheets:
+        if sheet.part_number:
+            if sheet.part_number not in sheet_usage_count:
+                sheet_usage_count[sheet.part_number] = {"used": 0, "quantity": sheet.quantity, "sheet_template": sheet}
+            else:
+                # If same part_number appears multiple times, use the max quantity
+                sheet_usage_count[sheet.part_number]["quantity"] = max(
+                    sheet_usage_count[sheet.part_number]["quantity"], sheet.quantity
+                )
+    
     # First pass: Try to fill actual sheets if use_actual=True
+    # Use a while loop to continue until all sheets are exhausted or all pieces fulfilled
     if use_actual and actual_sheets:
-        for sheet in actual_sheets:
-            sheet_assignments = []
-            sheet_used_area = sum(w * h for w, h in sheet.used_pieces)
-            available_area = (sheet.width * sheet.height) - sheet_used_area
+        max_iterations = 1000  # Safety limit
+        iteration = 0
+        
+        while iteration < max_iterations:
+            iteration += 1
+            made_progress = False
             
-            if available_area <= 0:
-                continue
-            
-            # Try to fit pieces on this sheet
-            for piece_idx, piece in enumerate(pieces):
-                if remaining[piece_idx] <= 0:
+            for sheet in actual_sheets:
+                # Check if we've used all available quantity of this sheet type
+                if sheet.part_number:
+                    usage_info = sheet_usage_count.get(sheet.part_number)
+                    if usage_info and usage_info["used"] >= usage_info["quantity"]:
+                        continue  # Skip if we've used all available quantity
+                
+                sheet_assignments = []
+                sheet_used_area = 0  # Each sheet starts fresh
+                available_area = sheet.width * sheet.height
+                
+                if available_area <= 0:
                     continue
                 
-                # Check if piece fits
-                can_fit, parts_per_sheet, orientation = can_fit_on_sheet(sheet, piece, SAW_KERF)
+                # Try to fit pieces on this sheet
+                for piece_idx, piece in enumerate(pieces):
+                    if remaining[piece_idx] <= 0:
+                        continue
+                    
+                    # Check if piece fits
+                    can_fit, parts_per_sheet, orientation = can_fit_on_sheet(sheet, piece, SAW_KERF)
+                    
+                    if can_fit and parts_per_sheet > 0:
+                        # Calculate how many we can cut from remaining quantity
+                        pieces_to_cut = min(remaining[piece_idx], parts_per_sheet)
+                        
+                        # Check if we have enough available area
+                        piece_area = piece.width * piece.height
+                        needed_area = pieces_to_cut * piece_area
+                        
+                        if sheet_used_area + needed_area <= (sheet.width * sheet.height):
+                            # Assign to this sheet
+                            sheet_assignments.append({
+                                "piece": piece,
+                                "quantity": pieces_to_cut,
+                                "orientation": orientation,
+                                "parts_per_sheet": parts_per_sheet
+                            })
+                            remaining[piece_idx] -= pieces_to_cut
+                            sheet_used_area += needed_area
+                            made_progress = True
                 
-                if can_fit and parts_per_sheet > 0:
-                    # Calculate how many we can cut from remaining quantity
-                    pieces_to_cut = min(remaining[piece_idx], parts_per_sheet)
+                # If we assigned anything to this sheet, add it to results
+                if sheet_assignments:
+                    # Calculate waste for this sheet
+                    total_piece_area = sum(a["piece"].width * a["piece"].height * a["quantity"] 
+                                          for a in sheet_assignments)
+                    sheet_area = sheet.width * sheet.height
+                    waste_pct = ((sheet_area - sheet_used_area) / sheet_area) * 100 if sheet_area > 0 else 0
                     
-                    # Check if we have enough available area
-                    piece_area = piece.width * piece.height
-                    needed_area = pieces_to_cut * piece_area
+                    results["assignments"].append({
+                        "sheet": sheet,
+                        "pieces": sheet_assignments,
+                        "cost": sheet.cost if sheet.cost > 0 else 0,
+                        "waste_pct": waste_pct,
+                        "utilization_pct": (1 - waste_pct / 100) * 100
+                    })
+                    results["sheets_used"].append(sheet.part_number or f"Sheet-{len(results['sheets_used'])}")
+                    results["total_cost"] += sheet.cost if sheet.cost > 0 else 0
                     
-                    if sheet_used_area + needed_area <= (sheet.width * sheet.height):
-                        # Assign to this sheet
-                        sheet_assignments.append({
-                            "piece": piece,
-                            "quantity": pieces_to_cut,
-                            "orientation": orientation,
-                            "parts_per_sheet": parts_per_sheet
-                        })
-                        remaining[piece_idx] -= pieces_to_cut
-                        sheet_used_area += needed_area
+                    # Track that we used this sheet
+                    if sheet.part_number:
+                        sheet_usage_count[sheet.part_number]["used"] += 1
             
-            # If we assigned anything to this sheet, add it to results
-            if sheet_assignments:
-                # Calculate waste for this sheet
-                total_piece_area = sum(a["piece"].width * a["piece"].height * a["quantity"] 
-                                      for a in sheet_assignments)
-                sheet_area = sheet.width * sheet.height
-                waste_pct = ((sheet_area - sheet_used_area) / sheet_area) * 100 if sheet_area > 0 else 0
-                
-                results["assignments"].append({
-                    "sheet": sheet,
-                    "pieces": sheet_assignments,
-                    "cost": sheet.cost if sheet.cost > 0 else 0,
-                    "waste_pct": waste_pct,
-                    "utilization_pct": (1 - waste_pct / 100) * 100
-                })
-                results["sheets_used"].append(sheet.part_number or f"Sheet-{len(results['sheets_used'])}")
-                results["total_cost"] += sheet.cost if sheet.cost > 0 else 0
+            # If no progress was made, break
+            if not made_progress:
+                break
     
     # Second pass: Use proposed sheets for remaining pieces
     # Group pieces by thickness to optimize sheet selection
@@ -615,8 +721,19 @@ with st.form("add_piece_form"):
     with col4:
         piece_qty = st.number_input("Quantity", min_value=1, value=100, step=1, key="qty_input")
     with col5:
-        piece_thickness = st.text_input("Thickness", value="", key="thickness_input", 
-                                       help="Optional - leave empty for any thickness")
+        thickness_options = get_thickness_fractions()
+        thickness_display_options = [""] + [f"{frac['display']}\" ({frac['decimal']:.4f}\")" for frac in thickness_options]
+        thickness_selected = st.selectbox(
+            "Thickness", 
+            options=thickness_display_options,
+            key="thickness_input",
+            help="Select thickness from dropdown (fractions like tape measure) or leave empty for any"
+        )
+        # Extract fraction from selection (e.g., "1/4\" (0.2500\")" -> "1/4")
+        piece_thickness = ""
+        if thickness_selected and thickness_selected != "":
+            # Extract the fraction part before the backslash
+            piece_thickness = thickness_selected.split('"')[0].strip()
     
     col_add, col_clear = st.columns(2)
     with col_add:
@@ -626,7 +743,8 @@ with st.form("add_piece_form"):
 
 if add_piece:
     if job_number and piece_width and piece_height and piece_qty:
-        thickness_val = safe_float(piece_thickness, None) if piece_thickness else None
+        # Convert fraction to decimal if provided
+        thickness_val = fraction_to_decimal(piece_thickness) if piece_thickness else None
         new_piece = Piece(
             job_number=job_number,
             width=piece_width,
@@ -647,13 +765,14 @@ if clear_all:
 # Display current pieces
 if st.session_state.pieces_list:
     st.subheader("📝 Pieces to Cut")
+    thickness_fractions = get_thickness_fractions()
     pieces_df = pd.DataFrame([
         {
             "Job #": p.job_number,
             "Width": f"{p.width}\"",
             "Height": f"{p.height}\"",
             "Quantity": p.quantity,
-            "Thickness": f"{p.thickness}\"" if p.thickness else "Any"
+            "Thickness": decimal_to_fraction(p.thickness, thickness_fractions) if p.thickness else "Any"
         }
         for p in st.session_state.pieces_list
     ])
@@ -682,36 +801,84 @@ if st.session_state.pieces_list:
                     # Convert to Sheet objects
                     available_sheets = []
                     
+                    # First pass: Load all sheets into a dictionary for lookup
+                    all_sheets_dict = {}
+                    for row in actual_sheets_data:
+                        part_num = row.get('part_number') or row.get('part number') or row.get('sheet_id') or row.get('id')
+                        if part_num:
+                            all_sheets_dict[part_num] = row
+                    
                     # Process actual sheets
                     for row in actual_sheets_data:
+                        part_num = row.get('part_number') or row.get('part number') or row.get('sheet_id') or row.get('id')
+                        
                         status = str(row.get('status', 'Available')).strip()
-                        if status == "Available":
+                        quantity = int(safe_float(row.get('quantity') or row.get('qty'), 1))
+                        
+                        # Check if unavailable or quantity is 0
+                        is_unavailable = status.upper() in ['UNAVAILABLE', 'UNAVAIL', 'NO', 'N', 'FALSE', '0'] or quantity <= 0
+                        
+                        # Track if we're using a substitute
+                        original_part_num = part_num
+                        substitute_part_num = None
+                        
+                        # If unavailable, check for substitute
+                        if is_unavailable:
+                            substitute_part = row.get('substitute') or row.get('sub')
+                            if substitute_part:
+                                substitute_part = str(substitute_part).strip()
+                                # Look up the substitute sheet
+                                if substitute_part in all_sheets_dict:
+                                    substitute_row = all_sheets_dict[substitute_part]
+                                    # Check if substitute is available
+                                    sub_status = str(substitute_row.get('status', 'Available')).strip()
+                                    sub_quantity = int(safe_float(substitute_row.get('quantity') or substitute_row.get('qty'), 1))
+                                    if sub_status.upper() in ['AVAILABLE', 'AVAIL', 'YES', 'Y', 'TRUE', '1'] and sub_quantity > 0:
+                                        # Use the substitute sheet data
+                                        row = substitute_row.copy()
+                                        substitute_part_num = substitute_part
+                        
+                        # Now process the sheet (either original or substitute)
+                        status = str(row.get('status', 'Available')).strip()
+                        if status.upper() in ['AVAILABLE', 'AVAIL', 'YES', 'Y', 'TRUE', '1']:
                             # Check for drop piece indicator
-                            drop_indicator = row.get('drop on drop output') or row.get('drop_on_drop_output') or row.get('drop')
+                            drop_indicator = row.get('drop') or row.get('drop on drop output') or row.get('drop_on_drop_output')
                             is_drop = str(drop_indicator).strip().upper() in ['X', 'Y', 'YES', 'TRUE', '1']
                             
+                            # Get quantity - critical for optimization
+                            quantity = int(safe_float(row.get('quantity') or row.get('qty'), 1))
+                            if quantity <= 0:
+                                continue  # Skip if no quantity available
+                            
+                            # Use original part_number for tracking (so we know what was requested)
+                            # But use substitute's dimensions, cost, quantity
                             sheet = Sheet(
-                                part_number=row.get('part_number') or row.get('part number') or row.get('sheet_id') or row.get('id'),
+                                part_number=original_part_num,  # Keep original part_number
                                 description=row.get('description') or row.get('desc'),
                                 width=safe_float(row.get('sheet_width') or row.get('width')),
                                 height=safe_float(row.get('sheet_length') or row.get('height') or row.get('length')),
                                 thickness=safe_float(row.get('thickness'), None),
                                 cost=safe_float(row.get('cost') or row.get('cost_per_sheet'), 0),
+                                quantity=quantity,
                                 is_actual=True,
                                 is_drop=is_drop,
-                                status=status
+                                status="Available"
                             )
                             if sheet.width > 0 and sheet.height > 0:
+                                # Add substitute info to description if using substitute
+                                if substitute_part_num:
+                                    sheet.description = (sheet.description or '') + f" (Substitute: {substitute_part_num})"
                                 available_sheets.append(sheet)
                     
                     # Process proposed sheets
                     for row in proposed_sheets_data:
                         # Check if this proposed sheet is marked as drop (can't be used as proposed)
-                        drop_indicator = row.get('drop on drop output') or row.get('drop_on_drop_output') or row.get('drop')
+                        drop_indicator = row.get('drop') or row.get('drop on drop output') or row.get('drop_on_drop_output')
                         is_drop = str(drop_indicator).strip().upper() in ['X', 'Y', 'YES', 'TRUE', '1']
                         
-                        # Only add if NOT a drop (empty "Drop on Drop Output" means it can be proposed)
+                        # Only add if NOT a drop (empty "drop" means it can be proposed)
                         if not is_drop:
+                            # Proposed sheets don't have quantity limits (unlimited availability)
                             sheet = Sheet(
                                 part_number=row.get('part_number') or row.get('part number'),
                                 description=row.get('description') or row.get('desc'),
@@ -719,6 +886,7 @@ if st.session_state.pieces_list:
                                 height=safe_float(row.get('sheet_length') or row.get('height') or row.get('length')),
                                 thickness=safe_float(row.get('thickness'), None),
                                 cost=safe_float(row.get('cost_per_sheet') or row.get('cost'), 0),
+                                quantity=999999,  # Unlimited for proposed sheets
                                 is_actual=False,
                                 is_drop=False
                             )
@@ -915,6 +1083,7 @@ if st.session_state.pieces_list:
                         
                         # Detailed assignments (collapsed by default)
                         with st.expander("📋 Detailed Sheet Assignments"):
+                            thickness_fractions_detail = get_thickness_fractions()
                             for idx, assign in enumerate(optimization_result['assignments'], 1):
                                 with st.expander(f"Sheet {idx}: {assign['sheet'].part_number or 'Proposed'} - ${assign['cost']:.2f} - {assign['waste_pct']:.1f}% waste"):
                                     sheet = assign['sheet']
@@ -923,11 +1092,16 @@ if st.session_state.pieces_list:
                                     with col1:
                                         st.markdown("**Sheet Info**")
                                         sheet_type = "Drop Piece" if sheet.is_drop else ("Actual" if sheet.is_actual else "Proposed")
+                                        thickness_display_json = decimal_to_fraction(sheet.thickness, thickness_fractions_detail) if sheet.thickness else "Any"
+                                        if sheet.thickness and thickness_display_json and thickness_display_json != f"{sheet.thickness:.4f}":
+                                            thickness_display_json = f"{thickness_display_json}\" ({sheet.thickness:.4f}\")"
+                                        elif sheet.thickness:
+                                            thickness_display_json = f"{sheet.thickness:.4f}\""
                                         st.json({
                                             "Part Number": sheet.part_number or "N/A",
                                             "Description": sheet.description or "N/A",
                                             "Size": f"{sheet.width}\" x {sheet.height}\"",
-                                            "Thickness": f"{sheet.thickness}\"" if sheet.thickness else "Any",
+                                            "Thickness": thickness_display_json,
                                             "Cost": f"${sheet.cost:.2f}",
                                             "Type": sheet_type,
                                             "Sheets Used": assign.get("sheets_count", 1)
