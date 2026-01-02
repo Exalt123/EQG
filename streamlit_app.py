@@ -142,7 +142,7 @@ def get_google_sheets_client(credentials_json):
         st.error(f"Error connecting to Google Sheets: {e}")
         return None
 
-def fetch_sheet_data(client, spreadsheet_id, sheet_name_or_id):
+def fetch_sheet_data(client, spreadsheet_id, sheet_name_or_id, credentials_json=None):
     """Fetch data from a specific sheet in the spreadsheet."""
     try:
         spreadsheet = client.open_by_key(spreadsheet_id)
@@ -193,11 +193,48 @@ def fetch_sheet_data(client, spreadsheet_id, sheet_name_or_id):
             clean_row = {k.strip().lower(): v for k, v in record.items()}
             result.append(clean_row)
         return result
+    except PermissionError as e:
+        # Get service account email from credentials to show in error
+        try:
+            service_account_email = credentials_json.get('client_email', 'your service account email')
+        except:
+            service_account_email = 'your service account email'
+        
+        st.error("❌ **Permission Error: Service account doesn't have access to the spreadsheet**")
+        st.warning(f"""
+**To fix this:**
+
+1. Open your Google Sheet
+2. Click the **"Share"** button (top right)
+3. Add this email address: `{service_account_email}`
+4. Give it **"Viewer"** access (read-only is enough)
+5. Click **"Send"** or **"Share"**
+6. Try again!
+
+**Note:** The service account email can be found in your JSON credentials file under `"client_email"`.
+        """)
+        return []
     except Exception as e:
         error_msg = str(e)
-        st.error(f"Error fetching sheet data: {error_msg}")
-        import traceback
-        st.code(traceback.format_exc(), language='python')
+        error_type = type(e).__name__
+        
+        # Check for common error types
+        if "403" in error_msg or "permission" in error_msg.lower():
+            st.error("❌ **Permission Error: Service account doesn't have access**")
+            st.warning("""
+**To fix:**
+1. Open your Google Sheet
+2. Click "Share" button
+3. Add your service account email (found in JSON file under "client_email")
+4. Give it "Viewer" access
+5. Try again!
+            """)
+        elif "404" in error_msg or "not found" in error_msg.lower():
+            st.error(f"❌ **Sheet Not Found: '{sheet_name_or_id}'**")
+            st.info("Check that the sheet name/ID is correct and exists in your spreadsheet.")
+        else:
+            st.error(f"Error fetching sheet data ({error_type}): {error_msg}")
+        
         return []
 
 # --- OPTIMIZATION ENGINE ---
@@ -818,12 +855,12 @@ if st.session_state.pieces_list:
                     # Fetch actual sheets
                     actual_sheets_data = []
                     if sheet_mode in ["Actual", "Both"]:
-                        actual_sheets_data = fetch_sheet_data(client, spreadsheet_id, actual_sheets_tab)
+                        actual_sheets_data = fetch_sheet_data(client, spreadsheet_id, actual_sheets_tab, credentials_json)
                     
                     # Fetch proposed sheets
                     proposed_sheets_data = []
                     if sheet_mode in ["Proposed", "Both"]:
-                        proposed_sheets_data = fetch_sheet_data(client, spreadsheet_id, proposed_sheets_tab)
+                        proposed_sheets_data = fetch_sheet_data(client, spreadsheet_id, proposed_sheets_tab, credentials_json)
                     
                     # Convert to Sheet objects
                     available_sheets = []
