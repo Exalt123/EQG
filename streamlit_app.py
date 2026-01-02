@@ -131,15 +131,59 @@ def safe_float(value, default=0.0):
 def get_google_sheets_client(credentials_json):
     """Initialize Google Sheets client from service account credentials."""
     try:
-        scopes = [
-            'https://www.googleapis.com/auth/spreadsheets',
-            'https://www.googleapis.com/auth/drive'
-        ]
-        creds = Credentials.from_service_account_info(credentials_json, scopes=scopes)
-        client = gspread.authorize(creds)
-        return client
+        # Validate credentials have required fields
+        required_fields = ['type', 'project_id', 'private_key_id', 'private_key', 'client_email']
+        missing_fields = [field for field in required_fields if field not in credentials_json]
+        if missing_fields:
+            st.error(f"Invalid credentials: Missing required fields: {', '.join(missing_fields)}")
+            return None
+        
+        # Use service_account_from_dict (recommended method for gspread 3.0+)
+        # This handles auth internally and avoids _auth_request issues
+        try:
+            client = gspread.service_account_from_dict(credentials_json)
+            return client
+        except AttributeError:
+            # Fallback for older gspread versions (< 3.0)
+            scopes = [
+                'https://www.googleapis.com/auth/spreadsheets.readonly',
+                'https://www.googleapis.com/auth/drive.readonly'
+            ]
+            creds = Credentials.from_service_account_info(credentials_json, scopes=scopes)
+            client = gspread.authorize(creds)
+            return client
+            
     except Exception as e:
-        st.error(f"Error connecting to Google Sheets: {e}")
+        error_msg = str(e)
+        error_type = type(e).__name__
+        
+        st.error(f"❌ **Error connecting to Google Sheets ({error_type})**")
+        
+        # Provide helpful error messages based on error type
+        if "permission" in error_msg.lower() or "403" in error_msg or isinstance(e, PermissionError):
+            service_email = credentials_json.get('client_email', 'your service account email')
+            st.warning(f"""
+**Permission Error - Action Required:**
+
+1. Open your Google Sheet
+2. Click **"Share"** button (top right)
+3. Add this email: `{service_email}`
+4. Give it **"Viewer"** access
+5. Click **"Send"** or **"Share"**
+6. Refresh this page and try again
+            """)
+        elif "404" in error_msg or "not found" in error_msg.lower():
+            st.warning("""
+**Spreadsheet Not Found:**
+- Check that the Spreadsheet ID is correct
+- Make sure the spreadsheet exists and is accessible
+            """)
+        else:
+            st.info(f"Error details: {error_msg}")
+            with st.expander("🔍 Technical Details"):
+                import traceback
+                st.code(traceback.format_exc(), language='python')
+        
         return None
 
 def fetch_sheet_data(client, spreadsheet_id, sheet_name_or_id, credentials_json=None):
