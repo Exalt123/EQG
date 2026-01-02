@@ -217,7 +217,7 @@ def optimize_proposed_only(pieces: List[Piece], proposed_sheets: List[Sheet], sa
                     "sheets_count": sheets_needed
                 })
                 results["total_cost"] += best_sheet.cost * sheets_needed
-                                results["sheets_used"].append(sheet.part_number or f"Proposed-{len(results['sheets_used'])}")
+                results["sheets_used"].append(best_sheet.part_number or f"Proposed-{len(results['sheets_used'])}")
     
     return results
 
@@ -310,7 +310,7 @@ def optimize_cutting(pieces: List[Piece], available_sheets: List[Sheet], use_act
                     "waste_pct": waste_pct,
                     "utilization_pct": (1 - waste_pct / 100) * 100
                 })
-                                results["sheets_used"].append(sheet.part_number or f"Sheet-{len(results['sheets_used'])}")
+                results["sheets_used"].append(sheet.part_number or f"Sheet-{len(results['sheets_used'])}")
                 results["total_cost"] += sheet.cost if sheet.cost > 0 else 0
     
     # Second pass: Use proposed sheets for remaining pieces
