@@ -127,7 +127,6 @@ def safe_float(value, default=0.0):
         return default
 
 # --- GOOGLE SHEETS CONNECTION ---
-@st.cache_data(ttl=300)
 def get_google_sheets_client(credentials_json):
     """Initialize Google Sheets client from service account credentials."""
     try:
@@ -138,20 +137,46 @@ def get_google_sheets_client(credentials_json):
             st.error(f"Invalid credentials: Missing required fields: {', '.join(missing_fields)}")
             return None
         
-        # Use service_account_from_dict (recommended method for gspread 3.0+)
-        # This handles auth internally and avoids _auth_request issues
+        # Method 1: Try service_account_from_dict (gspread 3.0+, handles auth internally)
+        if hasattr(gspread, 'service_account_from_dict'):
+            try:
+                client = gspread.service_account_from_dict(credentials_json)
+                # Test connection with a simple operation
+                try:
+                    # Try to list spreadsheets to verify auth works
+                    _ = client.list_spreadsheet_files(limit=1)
+                    return client
+                except Exception as test_error:
+                    # If test fails, fall through to alternative method
+                    pass
+            except Exception as e:
+                # If service_account_from_dict fails, try alternative
+                pass
+        
+        # Method 2: Create credentials with explicit scopes and use authorize
+        # Use full read/write scopes (not readonly) to avoid auth issues
+        scopes = [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive'
+        ]
+        
+        # Create credentials with the new google-auth 2.x API
+        creds = Credentials.from_service_account_info(
+            credentials_json,
+            scopes=scopes
+        )
+        
+        # Use gspread.authorize with the credentials
+        client = gspread.authorize(creds)
+        
+        # Test the connection
         try:
-            client = gspread.service_account_from_dict(credentials_json)
-            return client
-        except AttributeError:
-            # Fallback for older gspread versions (< 3.0)
-            scopes = [
-                'https://www.googleapis.com/auth/spreadsheets.readonly',
-                'https://www.googleapis.com/auth/drive.readonly'
-            ]
-            creds = Credentials.from_service_account_info(credentials_json, scopes=scopes)
-            client = gspread.authorize(creds)
-            return client
+            _ = client.list_spreadsheet_files(limit=1)
+        except Exception as test_error:
+            # Connection test failed, but continue anyway
+            pass
+            
+        return client
             
     except Exception as e:
         error_msg = str(e)
@@ -178,11 +203,24 @@ def get_google_sheets_client(credentials_json):
 - Check that the Spreadsheet ID is correct
 - Make sure the spreadsheet exists and is accessible
             """)
-        else:
-            st.info(f"Error details: {error_msg}")
-            with st.expander("🔍 Technical Details"):
-                import traceback
-                st.code(traceback.format_exc(), language='python')
+        elif "_auth_request" in error_msg or "AttributeError" in error_type:
+            st.warning("""
+**Authentication Error Detected:**
+
+This might be a library version issue. Try:
+
+1. **Clear the page cache** (refresh the page)
+2. **Update your libraries**:
+   ```bash
+   pip install --upgrade gspread google-auth
+   ```
+3. **Try again** - the app will attempt alternative authentication methods
+            """)
+        
+        # Always show technical details for debugging
+        with st.expander("🔍 Technical Error Details"):
+            import traceback
+            st.code(traceback.format_exc(), language='python')
         
         return None
 
