@@ -152,16 +152,40 @@ def fetch_sheet_data(client, spreadsheet_id, sheet_name_or_id):
             sheet_id_str = str(sheet_name_or_id).replace('gid=', '')
             try:
                 sheet = spreadsheet.get_worksheet_by_id(int(sheet_id_str))
-            except:
-                all_sheets = spreadsheet.worksheets()
-                for s in all_sheets:
-                    if str(s.id) == sheet_id_str:
-                        sheet = s
-                        break
-                else:
-                    raise ValueError(f"Sheet ID {sheet_name_or_id} not found")
+            except Exception as e1:
+                # Try to find by iterating through sheets
+                try:
+                    all_sheets = spreadsheet.worksheets()
+                    sheet = None
+                    for s in all_sheets:
+                        if str(s.id) == sheet_id_str:
+                            sheet = s
+                            break
+                    if sheet is None:
+                        # List available sheets for debugging
+                        available_ids = [str(s.id) for s in all_sheets]
+                        available_names = [s.title for s in all_sheets]
+                        raise ValueError(
+                            f"Sheet ID '{sheet_name_or_id}' not found. "
+                            f"Available sheet IDs: {available_ids[:5]}, "
+                            f"Available names: {available_names[:5]}"
+                        )
+                except Exception as e2:
+                    raise ValueError(f"Could not find sheet ID '{sheet_name_or_id}': {str(e2)}")
         else:
-            sheet = spreadsheet.worksheet(sheet_name_or_id)
+            try:
+                sheet = spreadsheet.worksheet(sheet_name_or_id)
+            except Exception as e:
+                # List available sheet names for debugging
+                try:
+                    all_sheets = spreadsheet.worksheets()
+                    available_names = [s.title for s in all_sheets]
+                    raise ValueError(
+                        f"Sheet name '{sheet_name_or_id}' not found. "
+                        f"Available sheet names: {', '.join(available_names[:10])}"
+                    )
+                except Exception as e2:
+                    raise ValueError(f"Could not find sheet '{sheet_name_or_id}': {str(e)}")
         
         records = sheet.get_all_records()
         result = []
@@ -170,7 +194,10 @@ def fetch_sheet_data(client, spreadsheet_id, sheet_name_or_id):
             result.append(clean_row)
         return result
     except Exception as e:
-        st.error(f"Error fetching sheet data: {e}")
+        error_msg = str(e)
+        st.error(f"Error fetching sheet data: {error_msg}")
+        import traceback
+        st.code(traceback.format_exc(), language='python')
         return []
 
 # --- OPTIMIZATION ENGINE ---
@@ -894,7 +921,23 @@ if st.session_state.pieces_list:
                                 available_sheets.append(sheet)
                     
                     if not available_sheets:
+                        # Provide more helpful error message
+                        error_details = []
+                        if sheet_mode in ["Actual", "Both"]:
+                            if not actual_sheets_data:
+                                error_details.append(f"• No data found in '{actual_sheets_tab}' tab")
+                            else:
+                                error_details.append(f"• Found {len(actual_sheets_data)} rows in '{actual_sheets_tab}' but none matched criteria")
+                        if sheet_mode in ["Proposed", "Both"]:
+                            if not proposed_sheets_data:
+                                error_details.append(f"• No data found in '{proposed_sheets_tab}' tab")
+                            else:
+                                error_details.append(f"• Found {len(proposed_sheets_data)} rows in '{proposed_sheets_tab}' but none matched criteria")
+                        
                         st.error("No sheets found. Check your sheet tabs and data structure.")
+                        if error_details:
+                            st.info("Details:\n" + "\n".join(error_details))
+                            st.info("Make sure your sheets have:\n• Correct column headers (part_number, sheet_width, sheet_length, etc.)\n• Status = 'Available' and quantity > 0\n• Valid dimensions (width and height > 0)")
                     else:
                         # Optimize
                         use_actual = sheet_mode in ["Actual", "Both"]
