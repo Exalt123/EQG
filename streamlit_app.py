@@ -1591,33 +1591,63 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Google Sheets setup
-    with st.expander("❓ How to Get JSON Credentials", expanded=False):
-        st.markdown("""
-        **Quick Steps:**
-        1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-        2. Create/select a project
-        3. Enable **Google Sheets API** and **Google Drive API**
-        4. Create a Service Account and download JSON key
-        5. Share your Google Sheet with the service account email
-        """)
-    
-    credentials_method = st.radio("Credentials Method", ["Upload JSON", "Paste JSON"])
+    # Try to get credentials from Streamlit secrets first
     credentials_json = None
     
-    if credentials_method == "Upload JSON":
-        cred_file = st.file_uploader("Service Account JSON", type=["json"], key="cred_upload")
-        if cred_file:
-            import json
-            credentials_json = json.load(cred_file)
-    else:
-        cred_text = st.text_area("Service Account JSON", height=200, key="cred_paste")
-        if cred_text:
-            import json
-            try:
-                credentials_json = json.loads(cred_text)
-            except json.JSONDecodeError:
-                st.error("Invalid JSON format")
+    try:
+        if "gcp_service_account" in st.secrets:
+            credentials_json = dict(st.secrets["gcp_service_account"])
+            st.success("✅ Using stored credentials (no upload needed!)")
+    except Exception:
+        pass
+    
+    # Only show manual upload if secrets not available
+    if not credentials_json:
+        st.info("💡 **For company-wide access:** Admin can configure credentials in Streamlit secrets to avoid manual uploads.")
+        
+        with st.expander("❓ Setup Instructions for Admin", expanded=False):
+            st.markdown("""
+            **For Streamlit Cloud/Deployment:**
+            1. Go to App Settings → Secrets
+            2. Add your service account JSON like this:
+            
+            ```toml
+            [gcp_service_account]
+            type = "service_account"
+            project_id = "your-project-id"
+            private_key_id = "your-key-id"
+            private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
+            client_email = "your-service-account@your-project.iam.gserviceaccount.com"
+            client_id = "your-client-id"
+            auth_uri = "https://accounts.google.com/o/oauth2/auth"
+            token_uri = "https://oauth2.googleapis.com/token"
+            auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+            client_x509_cert_url = "your-cert-url"
+            ```
+            
+            **Get Service Account JSON:**
+            1. [Google Cloud Console](https://console.cloud.google.com/)
+            2. Create/select a project
+            3. Enable **Google Sheets API** and **Google Drive API**
+            4. Create a Service Account and download JSON key
+            5. Share your Google Sheet with the service account email
+            """)
+        
+        credentials_method = st.radio("Credentials Method", ["Upload JSON", "Paste JSON"])
+        
+        if credentials_method == "Upload JSON":
+            cred_file = st.file_uploader("Service Account JSON", type=["json"], key="cred_upload")
+            if cred_file:
+                import json
+                credentials_json = json.load(cred_file)
+        else:
+            cred_text = st.text_area("Service Account JSON", height=200, key="cred_paste")
+            if cred_text:
+                import json
+                try:
+                    credentials_json = json.loads(cred_text)
+                except json.JSONDecodeError:
+                    st.error("Invalid JSON format")
     
     if credentials_json:
         st.success("✓ Credentials loaded")
