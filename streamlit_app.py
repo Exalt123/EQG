@@ -8,6 +8,14 @@ from dataclasses import dataclass
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.colors import to_rgba
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib.units import inch
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, PageBreak
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.lib import colors
+from io import BytesIO
+from datetime import datetime
 
 # Page config
 st.set_page_config(
@@ -448,6 +456,201 @@ def create_cutting_patterns(optimization_result, saw_kerf=0.125):
     unique_patterns.sort(key=lambda p: -p['sheets_to_cut'])
     
     return unique_patterns
+
+def generate_cutting_plan_pdf(cutting_patterns, saw_kerf=0.125, total_cost=0):
+    """Generate a production-ready PDF cut list with diagrams.
+    
+    Returns: BytesIO buffer containing the PDF
+    """
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, 
+                           rightMargin=0.5*inch, leftMargin=0.5*inch,
+                           topMargin=0.75*inch, bottomMargin=0.5*inch)
+    
+    # Styles
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=24,
+        textColor=colors.HexColor('#1f4788'),
+        spaceAfter=12,
+        alignment=TA_CENTER
+    )
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontSize=14,
+        textColor=colors.HexColor('#1f4788'),
+        spaceAfter=6,
+        spaceBefore=12
+    )
+    
+    elements = []
+    
+    # Title Page
+    elements.append(Paragraph("CUTTING PLAN", title_style))
+    elements.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", 
+                             styles['Normal']))
+    elements.append(Spacer(1, 0.3*inch))
+    
+    # Summary Section
+    elements.append(Paragraph("SUMMARY", heading_style))
+    
+    total_sheets = sum(p['sheets_to_cut'] for p in cutting_patterns)
+    total_patterns = len(cutting_patterns)
+    
+    summary_data = [
+        ['Total Patterns:', str(total_patterns)],
+        ['Total Sheets to Cut:', str(total_sheets)],
+        ['Total Cost:', f'${total_cost:.2f}'],
+        ['Kerf Width:', f'{saw_kerf}"']
+    ]
+    
+    summary_table = Table(summary_data, colWidths=[2.5*inch, 2*inch])
+    summary_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#e8e8e8')),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
+    ]))
+    elements.append(summary_table)
+    elements.append(Spacer(1, 0.3*inch))
+    
+    # Pattern Summary Table
+    elements.append(Paragraph("PATTERN SUMMARY", heading_style))
+    
+    pattern_summary_data = [['Pattern', 'Sheets to Cut', 'Panels/Sheet', 'Jobs', 'Utilization']]
+    for idx, pattern in enumerate(cutting_patterns, 1):
+        jobs_str = ", ".join(sorted(pattern['jobs']))
+        pattern_summary_data.append([
+            f"#{idx}",
+            str(pattern['sheets_to_cut']),
+            str(pattern['total_panels']),
+            jobs_str,
+            f"{pattern['utilization_pct']:.0f}%"
+        ])
+    
+    pattern_table = Table(pattern_summary_data, colWidths=[0.6*inch, 1*inch, 1*inch, 1.5*inch, 1*inch])
+    pattern_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f4788')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 11),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+        ('TOPPADDING', (0, 0), (-1, 0), 10),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ('TOPPADDING', (0, 1), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+    ]))
+    elements.append(pattern_table)
+    elements.append(PageBreak())
+    
+    # Individual Pattern Pages
+    for idx, pattern in enumerate(cutting_patterns, 1):
+        sheet = pattern['sheet']
+        
+        # Pattern Header
+        elements.append(Paragraph(f"PATTERN #{idx}", title_style))
+        elements.append(Spacer(1, 0.1*inch))
+        
+        # Pattern Info Box
+        combined_badge = " (COMBINED)" if pattern['is_combined'] else ""
+        jobs_str = ", ".join(sorted(pattern['jobs']))
+        
+        info_data = [
+            ['Sheet Size:', f"{sheet.width}\" × {sheet.height}\""],
+            ['Sheets to Cut:', f"{pattern['sheets_to_cut']}×", '', ''],
+            ['Panels per Sheet:', str(pattern['total_panels'])],
+            ['Jobs:', jobs_str],
+            ['Utilization:', f"{pattern['utilization_pct']:.0f}%"],
+            ['Waste:', f"{pattern['waste_pct']:.0f}%"]
+        ]
+        
+        info_table = Table(info_data, colWidths=[1.5*inch, 3*inch])
+        info_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#e8e8e8')),
+            ('BACKGROUND', (1, 1), (1, 1), colors.HexColor('#ff6b6b')),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+            ('TEXTCOLOR', (1, 1), (1, 1), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (1, 1), (1, 1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 11),
+            ('FONTSIZE', (1, 1), (1, 1), 16),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
+        ]))
+        elements.append(info_table)
+        elements.append(Spacer(1, 0.2*inch))
+        
+        # Generate and add cutting diagram
+        try:
+            fig = generate_pattern_diagram(
+                sheet.width, sheet.height, pattern['pieces'],
+                saw_kerf, pattern['sheets_to_cut']
+            )
+            
+            # Save figure to buffer
+            img_buffer = BytesIO()
+            fig.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
+            img_buffer.seek(0)
+            plt.close(fig)
+            
+            # Add to PDF
+            img = Image(img_buffer, width=6*inch, height=4*inch, kind='proportional')
+            elements.append(img)
+            elements.append(Spacer(1, 0.2*inch))
+        except Exception as e:
+            elements.append(Paragraph(f"[Diagram generation error: {e}]", styles['Normal']))
+        
+        # Piece Details Table
+        elements.append(Paragraph("PIECES IN THIS PATTERN:", heading_style))
+        
+        piece_data = [['Piece Size', 'Job #', 'Quantity', 'Layout', 'Orientation']]
+        for piece_info in pattern['pieces']:
+            piece = piece_info['piece']
+            grid = piece_info.get('grid', (1, 1))
+            quantity = piece_info.get('quantity', piece_info.get('parts_per_sheet', 0))
+            piece_data.append([
+                f"{piece.width}\" × {piece.height}\"",
+                piece.job_number,
+                str(quantity),
+                f"{grid[0]} × {grid[1]}",
+                piece_info.get('orientation', 'Normal')
+            ])
+        
+        piece_table = Table(piece_data, colWidths=[1.3*inch, 0.8*inch, 0.8*inch, 0.9*inch, 1*inch])
+        piece_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f4788')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        elements.append(piece_table)
+        
+        # Add page break between patterns (except last one)
+        if idx < len(cutting_patterns):
+            elements.append(PageBreak())
+    
+    # Build PDF
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
 
 # --- GOOGLE SHEETS CONNECTION ---
 def get_google_sheets_client(credentials_json):
@@ -1710,6 +1913,25 @@ if st.session_state.pieces_list:
                             if combined_count > 0:
                                 st.success(f"✨ **{combined_count} pattern(s) combine pieces from multiple jobs for better utilization!**")
                             st.info(f"📦 **Total sheets to cut: {total_sheets}**")
+                            
+                            # PDF Download Button
+                            st.markdown("---")
+                            try:
+                                pdf_buffer = generate_cutting_plan_pdf(
+                                    cutting_patterns, 
+                                    kerf_setting,
+                                    optimization_result['total_cost']
+                                )
+                                st.download_button(
+                                    label="📄 Download Production PDF",
+                                    data=pdf_buffer,
+                                    file_name=f"cutting_plan_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                                    mime="application/pdf",
+                                    use_container_width=True,
+                                    type="primary"
+                                )
+                            except Exception as e:
+                                st.error(f"Error generating PDF: {e}")
                         
                         st.markdown("---")
                         st.markdown("### 🔧 Cutting Diagrams")
