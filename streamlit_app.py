@@ -5,6 +5,9 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from matplotlib.colors import to_rgba
 
 # Page config
 st.set_page_config(
@@ -125,6 +128,226 @@ def safe_float(value, default=0.0):
         return float(value)
     except (ValueError, TypeError):
         return default
+
+# --- CUTTING DIAGRAM VISUALIZATION ---
+def generate_cutting_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.125, sheets_count=1):
+    """Generate a visual cutting diagram showing how pieces are laid out on the sheet.
+    
+    Args:
+        sheet_width: Width of the sheet in inches
+        sheet_height: Height of the sheet in inches  
+        pieces_info: List of dicts with piece info (piece, quantity, orientation, grid)
+        saw_kerf: Saw blade width
+        sheets_count: Number of sheets needed with this pattern
+    
+    Returns:
+        matplotlib figure
+    """
+    # Create figure with appropriate aspect ratio
+    fig_width = 10
+    fig_height = fig_width * (sheet_height / sheet_width) if sheet_width > 0 else 6
+    fig_height = min(max(fig_height, 4), 10)  # Clamp between 4 and 10
+    
+    fig, ax = plt.subplots(1, 1, figsize=(fig_width, fig_height))
+    
+    # Colors for pieces (warm wood tones)
+    piece_colors = [
+        '#E8D4B8',  # Light wood
+        '#D4B896',  # Medium wood
+        '#C9A87C',  # Tan wood
+        '#BF9B6E',  # Golden wood
+        '#A68B5B',  # Dark tan
+    ]
+    
+    # Draw sheet outline
+    sheet_rect = patches.Rectangle(
+        (0, 0), sheet_width, sheet_height,
+        linewidth=2, edgecolor='#333333', facecolor='#F5F5F5'
+    )
+    ax.add_patch(sheet_rect)
+    
+    # Track current position for laying out pieces
+    current_x = 0
+    current_y = 0
+    pieces_placed = 0
+    total_used_area = 0
+    
+    # Draw pieces
+    for piece_idx, piece_info in enumerate(pieces_info):
+        piece = piece_info.get('piece')
+        quantity = piece_info.get('quantity', 0)
+        orientation = piece_info.get('orientation', 'Normal')
+        grid = piece_info.get('grid', (1, 1))
+        parts_per_sheet = piece_info.get('parts_per_sheet', 1)
+        
+        if not piece or quantity == 0:
+            continue
+        
+        # Determine piece dimensions based on orientation
+        if orientation == "Rotated":
+            piece_w = piece.height
+            piece_h = piece.width
+        else:
+            piece_w = piece.width
+            piece_h = piece.height
+        
+        cols, rows = grid
+        color = piece_colors[piece_idx % len(piece_colors)]
+        
+        # Draw pieces in grid layout
+        pieces_on_this_sheet = min(quantity, parts_per_sheet)
+        placed_count = 0
+        
+        for row in range(rows):
+            for col in range(cols):
+                if placed_count >= pieces_on_this_sheet:
+                    break
+                
+                x = col * (piece_w + saw_kerf)
+                y = row * (piece_h + saw_kerf)
+                
+                # Check if piece fits
+                if x + piece_w <= sheet_width + 0.01 and y + piece_h <= sheet_height + 0.01:
+                    # Draw piece rectangle
+                    piece_rect = patches.Rectangle(
+                        (x, y), piece_w, piece_h,
+                        linewidth=1.5, edgecolor='#444444', facecolor=color
+                    )
+                    ax.add_patch(piece_rect)
+                    
+                    # Add piece label in center
+                    label = f"{piece.width}\"×{piece.height}\""
+                    ax.text(
+                        x + piece_w/2, y + piece_h/2, label,
+                        ha='center', va='center', fontsize=8,
+                        fontweight='bold', color='#333333'
+                    )
+                    
+                    placed_count += 1
+                    total_used_area += piece_w * piece_h
+            
+            if placed_count >= pieces_on_this_sheet:
+                break
+        
+        pieces_placed += placed_count
+    
+    # Calculate waste area
+    total_sheet_area = sheet_width * sheet_height
+    waste_area = total_sheet_area - total_used_area
+    utilization_pct = (total_used_area / total_sheet_area * 100) if total_sheet_area > 0 else 0
+    
+    # Draw waste areas (unfilled space) in light gray
+    # This is simplified - just shows the overall utilization
+    
+    # Add dimension labels
+    # Width dimension at bottom
+    ax.annotate(
+        '', xy=(sheet_width, -sheet_height*0.08), xytext=(0, -sheet_height*0.08),
+        arrowprops=dict(arrowstyle='<->', color='#CC4444', lw=1.5)
+    )
+    ax.text(
+        sheet_width/2, -sheet_height*0.12, f'{sheet_width}"',
+        ha='center', va='top', fontsize=10, color='#CC4444', fontweight='bold'
+    )
+    
+    # Height dimension on right
+    ax.annotate(
+        '', xy=(sheet_width*1.08, sheet_height), xytext=(sheet_width*1.08, 0),
+        arrowprops=dict(arrowstyle='<->', color='#CC4444', lw=1.5)
+    )
+    ax.text(
+        sheet_width*1.12, sheet_height/2, f'{sheet_height}"',
+        ha='left', va='center', fontsize=10, color='#CC4444', fontweight='bold', rotation=90
+    )
+    
+    # Add sheet count indicator
+    if sheets_count > 1:
+        ax.text(
+            sheet_width * 0.95, sheet_height * 0.95, f'x{sheets_count}',
+            ha='right', va='top', fontsize=14, color='#CC4444', fontweight='bold'
+        )
+    
+    # Set axis properties
+    ax.set_xlim(-sheet_width*0.15, sheet_width*1.2)
+    ax.set_ylim(-sheet_height*0.2, sheet_height*1.1)
+    ax.set_aspect('equal')
+    ax.axis('off')
+    
+    # Add title with statistics
+    title = f"Sheet Layout: {sheet_width}\" × {sheet_height}\" | {pieces_placed} pieces | {utilization_pct:.0f}% utilization"
+    ax.set_title(title, fontsize=11, fontweight='bold', pad=10)
+    
+    plt.tight_layout()
+    return fig
+
+def generate_cutting_statistics(sheet_width, sheet_height, pieces_info, saw_kerf=0.125, sheets_count=1):
+    """Calculate cutting statistics similar to CutListOptimizer.
+    
+    Returns dict with:
+    - total_used_area
+    - total_wasted_area  
+    - utilization_pct
+    - waste_pct
+    - total_cuts
+    - cut_length
+    - panels_per_sheet
+    """
+    total_used_area = 0
+    total_cuts = 0
+    total_cut_length = 0
+    panels_per_sheet = 0
+    
+    for piece_info in pieces_info:
+        piece = piece_info.get('piece')
+        quantity = piece_info.get('quantity', 0)
+        orientation = piece_info.get('orientation', 'Normal')
+        grid = piece_info.get('grid', (1, 1))
+        parts_per_sheet = piece_info.get('parts_per_sheet', 1)
+        
+        if not piece or quantity == 0:
+            continue
+        
+        # Determine piece dimensions based on orientation
+        if orientation == "Rotated":
+            piece_w = piece.height
+            piece_h = piece.width
+        else:
+            piece_w = piece.width
+            piece_h = piece.height
+        
+        cols, rows = grid
+        pieces_on_sheet = min(quantity, parts_per_sheet)
+        
+        # Calculate area used
+        total_used_area += piece_w * piece_h * pieces_on_sheet
+        panels_per_sheet += pieces_on_sheet
+        
+        # Calculate cuts (simplified: each row and column needs a cut)
+        # Horizontal cuts: rows - we need 'rows' horizontal cuts
+        # Vertical cuts: cols - we need 'cols' vertical cuts per row
+        cuts_for_this_piece = (rows + 1) + (cols + 1) * rows  # Simplified approximation
+        total_cuts += cuts_for_this_piece
+        
+        # Calculate cut length
+        total_cut_length += (rows + 1) * sheet_width + (cols + 1) * rows * piece_h
+    
+    total_sheet_area = sheet_width * sheet_height
+    total_wasted_area = total_sheet_area - total_used_area
+    utilization_pct = (total_used_area / total_sheet_area * 100) if total_sheet_area > 0 else 0
+    waste_pct = 100 - utilization_pct
+    
+    return {
+        "used_area": total_used_area,
+        "wasted_area": total_wasted_area,
+        "utilization_pct": utilization_pct,
+        "waste_pct": waste_pct,
+        "total_cuts": total_cuts,
+        "cut_length": total_cut_length,
+        "panels_per_sheet": panels_per_sheet,
+        "sheets_count": sheets_count,
+        "total_used_area_all_sheets": total_used_area * sheets_count,
+        "total_wasted_area_all_sheets": total_wasted_area * sheets_count
+    }
 
 # --- GOOGLE SHEETS CONNECTION ---
 def get_google_sheets_client(credentials_json):
@@ -371,41 +594,52 @@ If your spreadsheet isn't in the list above, check:
 
 # --- OPTIMIZATION ENGINE ---
 def calculate_parts_per_sheet(sheet_w, sheet_h, piece_w, piece_h, saw_kerf=0.125):
-    """Calculate how many pieces fit on a sheet in both orientations."""
+    """Calculate how many pieces fit on a sheet in both orientations.
+    
+    Kerf formula: n pieces need (n-1) kerfs between them
+    n * piece + (n-1) * kerf <= sheet
+    n <= (sheet + kerf) / (piece + kerf)
+    """
     eff_w = piece_w + saw_kerf
     eff_h = piece_h + saw_kerf
     
-    if eff_w > sheet_w and eff_w > sheet_h:
-        return 0, "None"
-    if eff_h > sheet_w and eff_h > sheet_h:
-        return 0, "None"
+    if piece_w > sheet_w and piece_w > sheet_h:
+        return 0, "None", (0, 0)
+    if piece_h > sheet_w and piece_h > sheet_h:
+        return 0, "None", (0, 0)
     
-    # Normal orientation
-    yield_norm = math.floor(sheet_w / eff_w) * math.floor(sheet_h / eff_h)
+    # Normal orientation: piece_w along sheet_w, piece_h along sheet_h
+    cols_norm = math.floor((sheet_w + saw_kerf) / eff_w)
+    rows_norm = math.floor((sheet_h + saw_kerf) / eff_h)
+    yield_norm = cols_norm * rows_norm
     
-    # Rotated orientation
-    yield_rot = math.floor(sheet_w / eff_h) * math.floor(sheet_h / eff_w)
+    # Rotated orientation: piece_h along sheet_w, piece_w along sheet_h
+    cols_rot = math.floor((sheet_w + saw_kerf) / eff_h)
+    rows_rot = math.floor((sheet_h + saw_kerf) / eff_w)
+    yield_rot = cols_rot * rows_rot
     
     if yield_norm >= yield_rot:
-        return yield_norm, "Normal"
+        return yield_norm, "Normal", (cols_norm, rows_norm)
     else:
-        return yield_rot, "Rotated"
+        return yield_rot, "Rotated", (cols_rot, rows_rot)
 
-def can_fit_on_sheet(sheet: Sheet, piece: Piece, saw_kerf=0.125) -> Tuple[bool, int, str]:
-    """Check if a piece can fit on a sheet, considering already used areas."""
+def can_fit_on_sheet(sheet: Sheet, piece: Piece, saw_kerf=0.125) -> Tuple[bool, int, str, Tuple[int, int]]:
+    """Check if a piece can fit on a sheet, considering already used areas.
+    Returns: (can_fit, parts_count, orientation, (cols, rows))
+    """
     # Check thickness match
     if piece.thickness is not None and sheet.thickness is not None:
         if abs(piece.thickness - sheet.thickness) > 0.01:
-            return False, 0, "Thickness mismatch"
+            return False, 0, "Thickness mismatch", (0, 0)
     
-    parts, orientation = calculate_parts_per_sheet(
+    parts, orientation, grid = calculate_parts_per_sheet(
         sheet.width, sheet.height, piece.width, piece.height, saw_kerf
     )
     
     if parts == 0:
-        return False, 0, "Doesn't fit"
+        return False, 0, "Doesn't fit", (0, 0)
     
-    return True, parts, orientation
+    return True, parts, orientation, grid
 
 def optimize_proposed_only(pieces: List[Piece], proposed_sheets: List[Sheet], saw_kerf: float = 0.125) -> Dict:
     """Calculate cost if using ONLY proposed/full sheets (no drop pieces).
@@ -455,8 +689,9 @@ def optimize_proposed_only(pieces: List[Piece], proposed_sheets: List[Sheet], sa
                 best_parts = 0
                 best_orientation = "Normal"
                 
+                best_grid = (0, 0)
                 for sheet in matching_sheets:
-                    can_fit, parts_per_sheet, orientation = can_fit_on_sheet(sheet, piece, SAW_KERF)
+                    can_fit, parts_per_sheet, orientation, grid = can_fit_on_sheet(sheet, piece, SAW_KERF)
                     if can_fit and parts_per_sheet > 0:
                         efficiency = parts_per_sheet / sheet.cost if sheet.cost > 0 else parts_per_sheet
                         if efficiency > best_efficiency:
@@ -464,6 +699,7 @@ def optimize_proposed_only(pieces: List[Piece], proposed_sheets: List[Sheet], sa
                             best_efficiency = efficiency
                             best_parts = parts_per_sheet
                             best_orientation = orientation
+                            best_grid = grid
                 
                 if best_sheet is None:
                     break
@@ -478,7 +714,8 @@ def optimize_proposed_only(pieces: List[Piece], proposed_sheets: List[Sheet], sa
                         "piece": piece,
                         "quantity": pieces_assigned,
                         "orientation": best_orientation,
-                        "parts_per_sheet": best_parts
+                        "parts_per_sheet": best_parts,
+                        "grid": best_grid
                     }],
                     "cost": best_sheet.cost * sheets_needed,
                     "sheets_count": sheets_needed
@@ -567,7 +804,7 @@ def optimize_cutting(pieces: List[Piece], available_sheets: List[Sheet], use_act
                         continue
                     
                     # Check if piece fits
-                    can_fit, parts_per_sheet, orientation = can_fit_on_sheet(sheet, piece, SAW_KERF)
+                    can_fit, parts_per_sheet, orientation, grid = can_fit_on_sheet(sheet, piece, SAW_KERF)
                     
                     if can_fit and parts_per_sheet > 0:
                         # Calculate how many we can cut from remaining quantity
@@ -583,7 +820,8 @@ def optimize_cutting(pieces: List[Piece], available_sheets: List[Sheet], use_act
                                 "piece": piece,
                                 "quantity": pieces_to_cut,
                                 "orientation": orientation,
-                                "parts_per_sheet": parts_per_sheet
+                                "parts_per_sheet": parts_per_sheet,
+                                "grid": grid
                             })
                             remaining[piece_idx] -= pieces_to_cut
                             sheet_used_area += needed_area
@@ -649,10 +887,11 @@ def optimize_cutting(pieces: List[Piece], available_sheets: List[Sheet], use_act
                 best_efficiency = 0
                 best_parts = 0
                 best_orientation = "Normal"
+                best_grid = (0, 0)
                 
                 # Find best sheet for remaining quantity
                 for sheet in matching_sheets:
-                    can_fit, parts_per_sheet, orientation = can_fit_on_sheet(sheet, piece, SAW_KERF)
+                    can_fit, parts_per_sheet, orientation, grid = can_fit_on_sheet(sheet, piece, SAW_KERF)
                     if can_fit and parts_per_sheet > 0:
                         # Calculate efficiency (parts per dollar)
                         efficiency = parts_per_sheet / sheet.cost if sheet.cost > 0 else parts_per_sheet
@@ -661,6 +900,7 @@ def optimize_cutting(pieces: List[Piece], available_sheets: List[Sheet], use_act
                             best_efficiency = efficiency
                             best_parts = parts_per_sheet
                             best_orientation = orientation
+                            best_grid = grid
                 
                 if best_sheet is None:
                     results["unfulfilled_pieces"].append({
@@ -691,7 +931,8 @@ def optimize_cutting(pieces: List[Piece], available_sheets: List[Sheet], use_act
                         "piece": piece,
                         "quantity": pieces_assigned,
                         "orientation": best_orientation,
-                        "parts_per_sheet": best_parts
+                        "parts_per_sheet": best_parts,
+                        "grid": best_grid
                     }],
                     "cost": best_sheet.cost * sheets_used_count,
                     "waste_pct": waste_pct,
@@ -745,7 +986,7 @@ def calculate_unoptimized_cost(pieces: List[Piece], available_sheets: List[Sheet
                 if abs(piece.thickness - sheet.thickness) > 0.01:
                     continue
             
-            can_fit, parts_per_sheet, orientation = can_fit_on_sheet(sheet, piece, SAW_KERF)
+            can_fit, parts_per_sheet, orientation, grid = can_fit_on_sheet(sheet, piece, SAW_KERF)
             if can_fit and parts_per_sheet > 0:
                 sheets_needed = math.ceil(piece.quantity / parts_per_sheet)
                 cost = sheet.cost * sheets_needed
@@ -758,7 +999,8 @@ def calculate_unoptimized_cost(pieces: List[Piece], available_sheets: List[Sheet
                         "sheets_needed": sheets_needed,
                         "parts_per_sheet": parts_per_sheet,
                         "orientation": orientation,
-                        "cost": cost
+                        "cost": cost,
+                        "grid": grid
                     }
         
         if best_assignment:
@@ -1301,6 +1543,48 @@ if st.session_state.pieces_list:
                             with st.expander(f"🔧 SETUP {program_idx}: {program['thickness_display']} Thickness - {program['sheets_count']} Sheet(s) - ${program['cost']:.2f}", expanded=True):
                                 sheet = program['sheet']
                                 
+                                # Two column layout: diagram on left, stats on right
+                                diagram_col, stats_col = st.columns([2, 1])
+                                
+                                with diagram_col:
+                                    # Generate and display cutting diagram
+                                    try:
+                                        fig = generate_cutting_diagram(
+                                            sheet.width, 
+                                            sheet.height, 
+                                            program['pieces'],
+                                            kerf_setting,
+                                            program['sheets_count']
+                                        )
+                                        st.pyplot(fig)
+                                        plt.close(fig)
+                                    except Exception as e:
+                                        st.warning(f"Could not generate diagram: {e}")
+                                
+                                with stats_col:
+                                    # Calculate and display statistics
+                                    stats = generate_cutting_statistics(
+                                        sheet.width,
+                                        sheet.height,
+                                        program['pieces'],
+                                        kerf_setting,
+                                        program['sheets_count']
+                                    )
+                                    
+                                    st.markdown("##### 📊 Global Statistics")
+                                    st.markdown(f"**Used stock sheets:** {sheet.width}×{sheet.height} x{program['sheets_count']}")
+                                    st.markdown(f"**Total used area:** {stats['total_used_area_all_sheets']:.1f} in² \\ {stats['utilization_pct']:.0f}%")
+                                    st.markdown(f"**Total wasted area:** {stats['total_wasted_area_all_sheets']:.1f} in² \\ {stats['waste_pct']:.0f}%")
+                                    st.markdown(f"**Kerf thickness:** {kerf_setting}\"")
+                                    
+                                    st.markdown("##### 📐 Sheet Statistics")
+                                    st.markdown(f"**Stock sheet:** {sheet.width}×{sheet.height}")
+                                    st.markdown(f"**Qty:** {program['sheets_count']}")
+                                    st.markdown(f"**Used area:** {stats['used_area']:.1f} in² \\ {stats['utilization_pct']:.0f}%")
+                                    st.markdown(f"**Wasted area:** {stats['wasted_area']:.1f} in² \\ {stats['waste_pct']:.0f}%")
+                                    st.markdown(f"**Panels:** {stats['panels_per_sheet']}")
+                                
+                                st.markdown("---")
                                 st.markdown(f"**Program Name:** {program['program_name']}")
                                 st.markdown(f"**Thickness:** {program['thickness_display']}")
                                 st.markdown(f"**Sheet:** {sheet.part_number or 'N/A'} - {sheet.description or ''} ({sheet.width}\" × {sheet.height}\")")
@@ -1311,11 +1595,13 @@ if st.session_state.pieces_list:
                                 program_pieces = []
                                 for piece_assign in program['pieces']:
                                     piece = piece_assign['piece']
+                                    grid = piece_assign.get('grid', (1, 1))
                                     program_pieces.append({
                                         "Job #": piece.job_number,
                                         "Size": f"{piece.width}\" × {piece.height}\"",
                                         "Quantity": piece_assign['quantity'],
                                         "Parts/Sheet": piece_assign['parts_per_sheet'],
+                                        "Layout": f"{grid[0]} × {grid[1]}",
                                         "Orientation": piece_assign['orientation']
                                     })
                                 st.dataframe(pd.DataFrame(program_pieces), use_container_width=True, hide_index=True)
