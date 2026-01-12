@@ -131,12 +131,12 @@ def safe_float(value, default=0.0):
 
 # --- CUTTING DIAGRAM VISUALIZATION ---
 def generate_cutting_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.125, sheets_count=1):
-    """Generate a visual cutting diagram showing how pieces are laid out on the sheet.
+    """Generate a visual cutting diagram showing how pieces are laid out on ONE sheet.
     
     Args:
         sheet_width: Width of the sheet in inches
         sheet_height: Height of the sheet in inches  
-        pieces_info: List of dicts with piece info (piece, quantity, orientation, grid)
+        pieces_info: List of dicts with piece info (piece, quantity, orientation, grid, parts_per_sheet)
         saw_kerf: Saw blade width
         sheets_count: Number of sheets needed with this pattern
     
@@ -166,21 +166,17 @@ def generate_cutting_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
     )
     ax.add_patch(sheet_rect)
     
-    # Track current position for laying out pieces
-    current_x = 0
-    current_y = 0
     pieces_placed = 0
     total_used_area = 0
     
-    # Draw pieces
+    # Draw pieces - show what fits on ONE sheet
     for piece_idx, piece_info in enumerate(pieces_info):
         piece = piece_info.get('piece')
-        quantity = piece_info.get('quantity', 0)
         orientation = piece_info.get('orientation', 'Normal')
         grid = piece_info.get('grid', (1, 1))
         parts_per_sheet = piece_info.get('parts_per_sheet', 1)
         
-        if not piece or quantity == 0:
+        if not piece:
             continue
         
         # Determine piece dimensions based on orientation
@@ -194,13 +190,12 @@ def generate_cutting_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
         cols, rows = grid
         color = piece_colors[piece_idx % len(piece_colors)]
         
-        # Draw pieces in grid layout
-        pieces_on_this_sheet = min(quantity, parts_per_sheet)
+        # Draw pieces in grid layout - only what fits on ONE sheet
         placed_count = 0
         
         for row in range(rows):
             for col in range(cols):
-                if placed_count >= pieces_on_this_sheet:
+                if placed_count >= parts_per_sheet:
                     break
                 
                 x = col * (piece_w + saw_kerf)
@@ -226,18 +221,14 @@ def generate_cutting_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
                     placed_count += 1
                     total_used_area += piece_w * piece_h
             
-            if placed_count >= pieces_on_this_sheet:
+            if placed_count >= parts_per_sheet:
                 break
         
         pieces_placed += placed_count
     
-    # Calculate waste area
+    # Calculate waste area for ONE sheet
     total_sheet_area = sheet_width * sheet_height
-    waste_area = total_sheet_area - total_used_area
     utilization_pct = (total_used_area / total_sheet_area * 100) if total_sheet_area > 0 else 0
-    
-    # Draw waste areas (unfilled space) in light gray
-    # This is simplified - just shows the overall utilization
     
     # Add dimension labels
     # Width dimension at bottom
@@ -273,8 +264,8 @@ def generate_cutting_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
     ax.set_aspect('equal')
     ax.axis('off')
     
-    # Add title with statistics
-    title = f"Sheet Layout: {sheet_width}\" × {sheet_height}\" | {pieces_placed} pieces | {utilization_pct:.0f}% utilization"
+    # Add title with statistics for ONE sheet
+    title = f"Sheet Layout: {sheet_width}\" × {sheet_height}\" | {pieces_placed} panels/sheet | {utilization_pct:.0f}% utilization"
     ax.set_title(title, fontsize=11, fontweight='bold', pad=10)
     
     plt.tight_layout()
@@ -283,28 +274,23 @@ def generate_cutting_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
 def generate_cutting_statistics(sheet_width, sheet_height, pieces_info, saw_kerf=0.125, sheets_count=1):
     """Calculate cutting statistics similar to CutListOptimizer.
     
-    Returns dict with:
-    - total_used_area
-    - total_wasted_area  
-    - utilization_pct
-    - waste_pct
-    - total_cuts
-    - cut_length
-    - panels_per_sheet
+    Calculates values for ONE sheet, then multiplies by sheets_count for totals.
+    
+    Returns dict with per-sheet and total values.
     """
-    total_used_area = 0
+    # Calculate for ONE sheet
+    used_area_per_sheet = 0
+    panels_per_sheet = 0
     total_cuts = 0
     total_cut_length = 0
-    panels_per_sheet = 0
     
     for piece_info in pieces_info:
         piece = piece_info.get('piece')
-        quantity = piece_info.get('quantity', 0)
         orientation = piece_info.get('orientation', 'Normal')
         grid = piece_info.get('grid', (1, 1))
         parts_per_sheet = piece_info.get('parts_per_sheet', 1)
         
-        if not piece or quantity == 0:
+        if not piece:
             continue
         
         # Determine piece dimensions based on orientation
@@ -316,37 +302,39 @@ def generate_cutting_statistics(sheet_width, sheet_height, pieces_info, saw_kerf
             piece_h = piece.height
         
         cols, rows = grid
-        pieces_on_sheet = min(quantity, parts_per_sheet)
         
-        # Calculate area used
-        total_used_area += piece_w * piece_h * pieces_on_sheet
-        panels_per_sheet += pieces_on_sheet
+        # Calculate area used PER SHEET (use parts_per_sheet, not quantity)
+        used_area_per_sheet += piece_w * piece_h * parts_per_sheet
+        panels_per_sheet += parts_per_sheet
         
-        # Calculate cuts (simplified: each row and column needs a cut)
-        # Horizontal cuts: rows - we need 'rows' horizontal cuts
-        # Vertical cuts: cols - we need 'cols' vertical cuts per row
-        cuts_for_this_piece = (rows + 1) + (cols + 1) * rows  # Simplified approximation
+        # Calculate cuts
+        cuts_for_this_piece = (rows + 1) + (cols + 1) * rows
         total_cuts += cuts_for_this_piece
         
         # Calculate cut length
         total_cut_length += (rows + 1) * sheet_width + (cols + 1) * rows * piece_h
     
-    total_sheet_area = sheet_width * sheet_height
-    total_wasted_area = total_sheet_area - total_used_area
-    utilization_pct = (total_used_area / total_sheet_area * 100) if total_sheet_area > 0 else 0
+    # Per-sheet calculations
+    sheet_area = sheet_width * sheet_height
+    wasted_area_per_sheet = sheet_area - used_area_per_sheet
+    utilization_pct = (used_area_per_sheet / sheet_area * 100) if sheet_area > 0 else 0
     waste_pct = 100 - utilization_pct
     
+    # Totals across all sheets
+    total_used_area = used_area_per_sheet * sheets_count
+    total_wasted_area = wasted_area_per_sheet * sheets_count
+    
     return {
-        "used_area": total_used_area,
-        "wasted_area": total_wasted_area,
+        "used_area": used_area_per_sheet,
+        "wasted_area": wasted_area_per_sheet,
         "utilization_pct": utilization_pct,
         "waste_pct": waste_pct,
-        "total_cuts": total_cuts,
-        "cut_length": total_cut_length,
+        "total_cuts": total_cuts * sheets_count,
+        "cut_length": total_cut_length * sheets_count,
         "panels_per_sheet": panels_per_sheet,
         "sheets_count": sheets_count,
-        "total_used_area_all_sheets": total_used_area * sheets_count,
-        "total_wasted_area_all_sheets": total_wasted_area * sheets_count
+        "total_used_area_all_sheets": total_used_area,
+        "total_wasted_area_all_sheets": total_wasted_area
     }
 
 # --- GOOGLE SHEETS CONNECTION ---
