@@ -457,8 +457,50 @@ def create_cutting_patterns(optimization_result, saw_kerf=0.125):
     
     return unique_patterns
 
+def calculate_production_time(pattern, saw_kerf=0.125):
+    """Calculate production time estimates for Holzer 6010.
+    
+    Based on typical Holzer 6010 performance:
+    - Setup time: 3 minutes per pattern
+    - Cut time: ~1.5 minutes per sheet (varies by complexity)
+    - Stack height: up to 1.25"
+    
+    Returns dict with timing info
+    """
+    sheet = pattern['sheet']
+    thickness = sheet.thickness if sheet.thickness else 0.75  # Default if not specified
+    sheets_to_cut = pattern['sheets_to_cut']
+    total_panels = pattern['total_panels']
+    
+    # Calculate stacking
+    max_stack_height = 1.25  # inches
+    sheets_per_stack = max(1, math.floor(max_stack_height / thickness)) if thickness > 0 else 1
+    num_runs = math.ceil(sheets_to_cut / sheets_per_stack)
+    
+    # Estimate cut time per run (based on pattern complexity)
+    # More cuts = more time. Estimate 10 seconds per cut + 30 seconds base
+    num_cuts = total_panels * 2  # Approximate: 2 cuts per panel (horizontal + vertical)
+    cut_time_per_sheet = 0.5 + (num_cuts * 10 / 60)  # minutes
+    
+    # Time estimates
+    setup_time = 3  # minutes - program setup
+    cut_time_per_run = cut_time_per_sheet * sheets_per_stack
+    total_cut_time = cut_time_per_run * num_runs
+    total_time = setup_time + total_cut_time
+    
+    return {
+        'thickness': thickness,
+        'sheets_per_stack': sheets_per_stack,
+        'num_runs': num_runs,
+        'setup_time_min': setup_time,
+        'cut_time_per_run_min': cut_time_per_run,
+        'total_cut_time_min': total_cut_time,
+        'total_time_min': total_time,
+        'sheets_to_cut': sheets_to_cut
+    }
+
 def generate_cutting_plan_pdf(cutting_patterns, saw_kerf=0.125, total_cost=0):
-    """Generate a production-ready PDF cut list with diagrams.
+    """Generate a production-ready PDF cut list with diagrams and production tracking.
     
     Returns: BytesIO buffer containing the PDF
     """
@@ -565,31 +607,91 @@ def generate_cutting_plan_pdf(cutting_patterns, saw_kerf=0.125, total_cost=0):
         combined_badge = " (COMBINED)" if pattern['is_combined'] else ""
         jobs_str = ", ".join(sorted(pattern['jobs']))
         
+        # Calculate production timing
+        timing = calculate_production_time(pattern, saw_kerf)
+        
+        # Pattern info table
         info_data = [
             ['Sheet Size:', f"{sheet.width}\" × {sheet.height}\""],
-            ['Sheets to Cut:', f"{pattern['sheets_to_cut']}×", '', ''],
             ['Panels per Sheet:', str(pattern['total_panels'])],
             ['Jobs:', jobs_str],
             ['Utilization:', f"{pattern['utilization_pct']:.0f}%"],
             ['Waste:', f"{pattern['waste_pct']:.0f}%"]
         ]
         
+        # Add drop piece indicator
+        if sheet.is_drop:
+            if sheet.cost == 0:
+                info_data.insert(1, ['*** FREE DROP ***', 'From Inventory ($0)'])
+            else:
+                info_data.insert(1, ['DROP PIECE:', f'Cost: ${sheet.cost:.2f}'])
+        
         info_table = Table(info_data, colWidths=[1.5*inch, 3*inch])
         info_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#e8e8e8')),
-            ('BACKGROUND', (1, 1), (1, 1), colors.HexColor('#ff6b6b')),
             ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-            ('TEXTCOLOR', (1, 1), (1, 1), colors.white),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTNAME', (1, 1), (1, 1), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, -1), 11),
-            ('FONTSIZE', (1, 1), (1, 1), 16),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
             ('TOPPADDING', (0, 0), (-1, -1), 6),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
         ]))
         elements.append(info_table)
+        elements.append(Spacer(1, 0.15*inch))
+        
+        # OPERATOR INSTRUCTIONS - Big and clear
+        operator_data = [
+            ['CUT THIS PATTERN:', f"{pattern['sheets_to_cut']} SHEETS"],
+            ['Sheet Thickness:', f"{timing['thickness']}\""],
+            ['Stack Height:', f"{timing['sheets_per_stack']} sheets per stack (max 1.25\")"],
+            ['Number of Runs:', f"{timing['num_runs']} runs"],
+            ['Est. Time per Run:', f"~{timing['cut_time_per_run_min']:.1f} minutes"],
+            ['Est. Total Time:', f"~{timing['total_time_min']:.0f} minutes (includes setup)"]
+        ]
+        
+        operator_table = Table(operator_data, colWidths=[2*inch, 2.5*inch])
+        operator_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (1, 0), colors.HexColor('#ff6b6b')),
+            ('TEXTCOLOR', (0, 0), (1, 0), colors.white),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#fff4e6')),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (1, 0), 'Helvetica-Bold'),
+            ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (1, 0), 13),
+            ('FONTSIZE', (0, 1), (-1, -1), 11),
+            ('FONTSIZE', (1, 0), (1, 0), 18),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ]))
+        elements.append(operator_table)
+        elements.append(Spacer(1, 0.15*inch))
+        
+        # OPERATOR TRACKING FORM
+        elements.append(Paragraph("OPERATOR TRACKING (Fill in after cutting):", heading_style))
+        tracking_data = [
+            ['Operator Name:', '___________________________', 'Date:', '_______________'],
+            ['Actual Sheets Cut:', '__________', 'Actual Time:', '__________  minutes'],
+            ['Notes/Issues:', '', '', ''],
+            ['', '', '', '']
+        ]
+        
+        tracking_table = Table(tracking_data, colWidths=[1.3*inch, 1.5*inch, 0.8*inch, 1.2*inch])
+        tracking_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e8e8e8')),
+            ('BACKGROUND', (0, 2), (-1, -1), colors.white),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
+            ('ALIGN', (1, 0), (-1, -1), 'LEFT'),
+            ('SPAN', (1, 2), (3, 3)),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ]))
+        elements.append(tracking_table)
         elements.append(Spacer(1, 0.2*inch))
         
         # Generate and add cutting diagram
@@ -1105,11 +1207,11 @@ def optimize_cutting(pieces: List[Piece], available_sheets: List[Sheet], use_act
     actual_sheets = [s for s in available_sheets if s.is_actual and s.status == "Available"]
     proposed_sheets = [s for s in available_sheets if not s.is_actual]
     
-    # Sort actual sheets: prioritize drop pieces first (they're free/cheap), then by cost
+    # Sort actual sheets: ABSOLUTE priority to $0 drop pieces, then other drops, then by cost
     actual_sheets.sort(key=lambda x: (
-        0 if x.is_drop else 1,  # Drop pieces first
-        x.cost,  # Then by cost
-        -x.width * x.height  # Smaller sheets first
+        0 if (x.is_drop and x.cost == 0) else (1 if x.is_drop else 2),  # Free drops FIRST
+        x.cost,  # Then by cost (free to expensive)
+        -x.width * x.height  # Prefer larger sheets (more versatile)
     ))
     
     # Sort proposed sheets by cost per square inch
@@ -1328,9 +1430,13 @@ def calculate_unoptimized_cost(pieces: List[Piece], available_sheets: List[Sheet
     actual_sheets = [s for s in available_sheets if s.is_actual and s.status == "Available"]
     proposed_sheets = [s for s in available_sheets if not s.is_actual and not s.is_drop]
     
-    # Sort by cost
+    # Sort by priority: free drops first, then by cost
     if use_actual and actual_sheets:
-        actual_sheets.sort(key=lambda x: (x.cost, -x.width * x.height))
+        actual_sheets.sort(key=lambda x: (
+            0 if (x.is_drop and x.cost == 0) else (1 if x.is_drop else 2),
+            x.cost,
+            -x.width * x.height
+        ))
     proposed_sheets.sort(key=lambda x: x.cost / (x.width * x.height) if (x.width * x.height) > 0 else float('inf'))
     
     total_cost = 0
@@ -1813,7 +1919,16 @@ if st.session_state.pieces_list:
                                 )
                             
                             with comp_col4:
-                                st.metric("Drop Pieces Used", drop_pieces_used)
+                                # Count free drop pieces separately
+                                free_drops_used = sum(1 for assign in optimization_result['assignments'] 
+                                                     if assign['sheet'].is_drop and assign['sheet'].cost == 0)
+                                paid_drops_used = drop_pieces_used - free_drops_used
+                                
+                                drop_label = f"Drop Pieces: {drop_pieces_used}"
+                                if free_drops_used > 0:
+                                    drop_label = f"Drops Used ({free_drops_used} FREE)"
+                                st.metric(drop_label, drop_pieces_used, 
+                                         delta=f"${sum(assign['sheet'].cost for assign in optimization_result['assignments'] if assign['sheet'].is_drop):.0f} saved" if drop_pieces_used > 0 else None)
                             
                             # Savings breakdown
                             with st.expander("📈 Savings Breakdown", expanded=True):
@@ -1822,6 +1937,9 @@ if st.session_state.pieces_list:
                                 if drop_pieces_used > 0:
                                     # Estimate drop piece savings (cost of drop pieces if bought as full sheets)
                                     drop_savings_estimate = 0
+                                    free_drop_savings = 0
+                                    free_drop_count = 0
+                                    
                                     for assign in optimization_result['assignments']:
                                         if assign['sheet'].is_drop:
                                             # Find equivalent full sheet cost
@@ -1832,14 +1950,31 @@ if st.session_state.pieces_list:
                                                     if prop_sheet.width >= assign['sheet'].width and prop_sheet.height >= assign['sheet'].height:
                                                         if equivalent_full is None or prop_sheet.cost < equivalent_full.cost:
                                                             equivalent_full = prop_sheet
+                                            
                                             if equivalent_full:
-                                                drop_savings_estimate += equivalent_full.cost - assign['sheet'].cost
+                                                savings = equivalent_full.cost - assign['sheet'].cost
+                                                drop_savings_estimate += savings
+                                                
+                                                if assign['sheet'].cost == 0:
+                                                    free_drop_count += 1
+                                                    free_drop_savings += savings
                                     
-                                    savings_data.append({
-                                        "Source": "Using Drop Pieces",
-                                        "Savings": f"${drop_savings_estimate:.2f}",
-                                        "Details": f"{drop_pieces_used} drop piece(s) used instead of full sheets"
-                                    })
+                                    # Show FREE drops separately
+                                    if free_drop_count > 0:
+                                        savings_data.append({
+                                            "Source": "🎉 FREE Drop Pieces",
+                                            "Savings": f"${free_drop_savings:.2f}",
+                                            "Details": f"{free_drop_count} FREE drop piece(s) from inventory (cost=$0) - estimated value if bought new"
+                                        })
+                                    
+                                    # Show other drops if any
+                                    if drop_pieces_used > free_drop_count:
+                                        other_drop_savings = drop_savings_estimate - free_drop_savings
+                                        savings_data.append({
+                                            "Source": "Other Drop Pieces",
+                                            "Savings": f"${other_drop_savings:.2f}",
+                                            "Details": f"{drop_pieces_used - free_drop_count} drop piece(s) used instead of full sheets"
+                                        })
                                 
                                 if multi_job_sheets > 0:
                                     savings_data.append({
@@ -1892,11 +2027,17 @@ if st.session_state.pieces_list:
                             st.markdown("### 📋 Pattern Summary")
                             pattern_summary = []
                             total_sheets = 0
+                            total_est_time = 0
+                            
                             for idx, pattern in enumerate(cutting_patterns, 1):
                                 total_sheets += pattern['sheets_to_cut']
                                 # List all piece sizes in this pattern
                                 piece_sizes = [f"{p['piece'].width}×{p['piece'].height}" for p in pattern['pieces']]
                                 jobs_str = ", ".join(sorted(pattern['jobs']))
+                                
+                                # Calculate production time
+                                timing = calculate_production_time(pattern, kerf_setting)
+                                total_est_time += timing['total_time_min']
                                 
                                 pattern_summary.append({
                                     "Pattern": f"#{idx}",
@@ -1904,6 +2045,8 @@ if st.session_state.pieces_list:
                                     "Jobs": jobs_str,
                                     "Panels/Sheet": pattern['total_panels'],
                                     "Sheets to Cut": pattern['sheets_to_cut'],
+                                    "Runs": timing['num_runs'],
+                                    "Est. Time": f"{timing['total_time_min']:.0f}m",
                                     "Utilization": f"{pattern['utilization_pct']:.0f}%",
                                     "Combined": "✓" if pattern['is_combined'] else ""
                                 })
@@ -1912,7 +2055,17 @@ if st.session_state.pieces_list:
                             combined_count = sum(1 for p in cutting_patterns if p['is_combined'])
                             if combined_count > 0:
                                 st.success(f"✨ **{combined_count} pattern(s) combine pieces from multiple jobs for better utilization!**")
-                            st.info(f"📦 **Total sheets to cut: {total_sheets}**")
+                            
+                            # Production summary
+                            hours = int(total_est_time // 60)
+                            minutes = int(total_est_time % 60)
+                            time_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+                            
+                            col_summary1, col_summary2 = st.columns(2)
+                            with col_summary1:
+                                st.info(f"📦 **Total sheets to cut: {total_sheets}**")
+                            with col_summary2:
+                                st.info(f"⏱️ **Est. production time: {time_str}** (Holzer 6010)")
                             
                             # PDF Download Button
                             st.markdown("---")
@@ -1941,8 +2094,14 @@ if st.session_state.pieces_list:
                             sheet = pattern['sheet']
                             jobs_str = ", ".join(sorted(pattern['jobs']))
                             combined_badge = " 🔗 COMBINED" if pattern['is_combined'] else ""
+                            drop_badge = ""
+                            if pattern['sheet'].is_drop:
+                                if pattern['sheet'].cost == 0:
+                                    drop_badge = " 🎉 FREE DROP"
+                                else:
+                                    drop_badge = " 💰 DROP"
                             
-                            with st.expander(f"**Pattern #{idx + 1}** — Cut {pattern['sheets_to_cut']} sheet(s) — {pattern['utilization_pct']:.0f}% utilization{combined_badge}", expanded=True):
+                            with st.expander(f"**Pattern #{idx + 1}** — Cut {pattern['sheets_to_cut']} sheet(s) — {pattern['utilization_pct']:.0f}% utilization{combined_badge}{drop_badge}", expanded=True):
                                 
                                 col1, col2 = st.columns([2, 1])
                                 
@@ -1963,11 +2122,30 @@ if st.session_state.pieces_list:
                                 
                                 with col2:
                                     st.markdown(f"### ✂️ Cut {pattern['sheets_to_cut']}×")
+                                    
+                                    # Show drop piece info prominently
+                                    if sheet.is_drop:
+                                        if sheet.cost == 0:
+                                            st.success("🎉 **FREE DROP PIECE** - From inventory!")
+                                        else:
+                                            st.info(f"💰 **DROP PIECE** - Cost: ${sheet.cost:.2f}")
+                                    
                                     st.markdown(f"**Sheet:** {sheet.width}\" × {sheet.height}\"")
+                                    if sheet.part_number:
+                                        st.markdown(f"**Part #:** {sheet.part_number}")
                                     st.markdown(f"**Jobs:** {jobs_str}")
                                     st.markdown(f"**Panels/sheet:** {pattern['total_panels']}")
                                     st.markdown(f"**Utilization:** {pattern['utilization_pct']:.0f}%")
                                     st.markdown(f"**Waste:** {pattern['waste_pct']:.0f}%")
+                                    
+                                    # Production timing
+                                    st.markdown("---")
+                                    st.markdown("**⏱️ Production (Holzer 6010):**")
+                                    timing = calculate_production_time(pattern, kerf_setting)
+                                    st.markdown(f"- **Stack:** {timing['sheets_per_stack']} sheets/run (max 1.25\")")
+                                    st.markdown(f"- **Runs needed:** {timing['num_runs']}")
+                                    st.markdown(f"- **Time per run:** ~{timing['cut_time_per_run_min']:.1f} min")
+                                    st.markdown(f"- **Total time:** ~{timing['total_time_min']:.0f} min")
                                     
                                     # Piece breakdown
                                     st.markdown("---")
