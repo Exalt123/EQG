@@ -672,23 +672,29 @@ def generate_cutting_plan_pdf(cutting_patterns, saw_kerf=0.125, total_cost=0):
         elements.append(Paragraph("OPERATOR TRACKING (Fill in after cutting):", heading_style))
         tracking_data = [
             ['Operator Name:', '___________________________', 'Date:', '_______________'],
-            ['Actual Sheets Cut:', '__________', 'Actual Time:', '__________  minutes'],
-            ['Notes/Issues:', '', '', ''],
-            ['', '', '', '']
+            ['Actual Sheets Cut:', '__________', 'Actual Time (min):', '__________'],
+            ['Notes/Issues:', ''],
+            ['', '']
         ]
         
-        tracking_table = Table(tracking_data, colWidths=[1.3*inch, 1.5*inch, 0.8*inch, 1.2*inch])
+        tracking_table = Table(tracking_data, colWidths=[1.6*inch, 2*inch, 1.6*inch, 1.6*inch])
         tracking_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e8e8e8')),
+            ('BACKGROUND', (0, 0), (1, 1), colors.HexColor('#f0f0f0')),
+            ('BACKGROUND', (2, 0), (3, 1), colors.HexColor('#f0f0f0')),
             ('BACKGROUND', (0, 2), (-1, -1), colors.white),
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('FONTNAME', (2, 0), (2, 1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 11),
             ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
-            ('ALIGN', (1, 0), (-1, -1), 'LEFT'),
-            ('SPAN', (1, 2), (3, 3)),
+            ('ALIGN', (2, 0), (2, 1), 'RIGHT'),
+            ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+            ('ALIGN', (3, 0), (3, -1), 'LEFT'),
+            ('SPAN', (1, 2), (3, 3)),  # Notes section spans all columns
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+            ('TOPPADDING', (0, 0), (-1, -1), 12),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
             ('GRID', (0, 0), (-1, -1), 1, colors.black)
         ]))
         elements.append(tracking_table)
