@@ -130,27 +130,27 @@ def safe_float(value, default=0.0):
         return default
 
 # --- CUTTING DIAGRAM VISUALIZATION ---
-def generate_cutting_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.125, sheets_count=1):
-    """Generate a visual cutting diagram showing how pieces are laid out on ONE sheet.
+def generate_pattern_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.125, sheets_to_cut=1):
+    """Generate a visual cutting diagram for a pattern (may have MULTIPLE piece types).
     
     Args:
         sheet_width: Width of the sheet in inches
         sheet_height: Height of the sheet in inches  
-        pieces_info: List of dicts with piece info (piece, quantity, orientation, grid, parts_per_sheet)
+        pieces_info: List of piece dicts with (piece, orientation, grid, parts_per_sheet)
         saw_kerf: Saw blade width
-        sheets_count: Number of sheets needed with this pattern
+        sheets_to_cut: How many sheets to cut with this pattern
     
     Returns:
         matplotlib figure
     """
     # Create figure with appropriate aspect ratio
-    fig_width = 10
-    fig_height = fig_width * (sheet_height / sheet_width) if sheet_width > 0 else 6
-    fig_height = min(max(fig_height, 4), 10)  # Clamp between 4 and 10
+    fig_width = 8
+    fig_height = fig_width * (sheet_height / sheet_width) if sheet_width > 0 else 5
+    fig_height = min(max(fig_height, 3), 8)
     
     fig, ax = plt.subplots(1, 1, figsize=(fig_width, fig_height))
     
-    # Colors for pieces (warm wood tones)
+    # Colors for different piece types (warm wood tones)
     piece_colors = [
         '#E8D4B8',  # Light wood
         '#D4B896',  # Medium wood
@@ -159,17 +159,18 @@ def generate_cutting_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
         '#A68B5B',  # Dark tan
     ]
     
-    # Draw sheet outline
+    # Draw sheet outline (light gray background)
     sheet_rect = patches.Rectangle(
         (0, 0), sheet_width, sheet_height,
         linewidth=2, edgecolor='#333333', facecolor='#F5F5F5'
     )
     ax.add_patch(sheet_rect)
     
-    pieces_placed = 0
     total_used_area = 0
+    total_panels = 0
+    current_y = 0  # Track vertical position for stacking different piece types
     
-    # Draw pieces - show what fits on ONE sheet
+    # Draw each piece type
     for piece_idx, piece_info in enumerate(pieces_info):
         piece = piece_info.get('piece')
         orientation = piece_info.get('orientation', 'Normal')
@@ -190,7 +191,7 @@ def generate_cutting_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
         cols, rows = grid
         color = piece_colors[piece_idx % len(piece_colors)]
         
-        # Draw pieces in grid layout - only what fits on ONE sheet
+        # Draw pieces in grid layout
         placed_count = 0
         
         for row in range(rows):
@@ -199,7 +200,7 @@ def generate_cutting_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
                     break
                 
                 x = col * (piece_w + saw_kerf)
-                y = row * (piece_h + saw_kerf)
+                y = current_y + row * (piece_h + saw_kerf)
                 
                 # Check if piece fits
                 if x + piece_w <= sheet_width + 0.01 and y + piece_h <= sheet_height + 0.01:
@@ -210,11 +211,13 @@ def generate_cutting_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
                     )
                     ax.add_patch(piece_rect)
                     
-                    # Add piece label in center
-                    label = f"{piece.width}\"×{piece.height}\""
+                    # Add small label in piece
+                    label = f"{piece.width}×{piece.height}"
+                    fontsize = min(8, piece_w * 0.3, piece_h * 0.3)
+                    fontsize = max(5, fontsize)
                     ax.text(
                         x + piece_w/2, y + piece_h/2, label,
-                        ha='center', va='center', fontsize=8,
+                        ha='center', va='center', fontsize=fontsize,
                         fontweight='bold', color='#333333'
                     )
                     
@@ -224,118 +227,120 @@ def generate_cutting_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
             if placed_count >= parts_per_sheet:
                 break
         
-        pieces_placed += placed_count
+        total_panels += placed_count
+        
+        # Move Y position for next piece type (stack vertically)
+        if placed_count > 0:
+            current_y += rows * (piece_h + saw_kerf)
     
-    # Calculate waste area for ONE sheet
-    total_sheet_area = sheet_width * sheet_height
-    utilization_pct = (total_used_area / total_sheet_area * 100) if total_sheet_area > 0 else 0
+    # Calculate utilization
+    sheet_area = sheet_width * sheet_height
+    utilization_pct = (total_used_area / sheet_area * 100) if sheet_area > 0 else 0
     
     # Add dimension labels
-    # Width dimension at bottom
     ax.annotate(
-        '', xy=(sheet_width, -sheet_height*0.08), xytext=(0, -sheet_height*0.08),
+        '', xy=(sheet_width, -sheet_height*0.06), xytext=(0, -sheet_height*0.06),
         arrowprops=dict(arrowstyle='<->', color='#CC4444', lw=1.5)
     )
     ax.text(
-        sheet_width/2, -sheet_height*0.12, f'{sheet_width}"',
-        ha='center', va='top', fontsize=10, color='#CC4444', fontweight='bold'
+        sheet_width/2, -sheet_height*0.10, f'{sheet_width}"',
+        ha='center', va='top', fontsize=9, color='#CC4444', fontweight='bold'
     )
     
-    # Height dimension on right
     ax.annotate(
-        '', xy=(sheet_width*1.08, sheet_height), xytext=(sheet_width*1.08, 0),
+        '', xy=(sheet_width*1.06, sheet_height), xytext=(sheet_width*1.06, 0),
         arrowprops=dict(arrowstyle='<->', color='#CC4444', lw=1.5)
     )
     ax.text(
-        sheet_width*1.12, sheet_height/2, f'{sheet_height}"',
-        ha='left', va='center', fontsize=10, color='#CC4444', fontweight='bold', rotation=90
+        sheet_width*1.10, sheet_height/2, f'{sheet_height}"',
+        ha='left', va='center', fontsize=9, color='#CC4444', fontweight='bold', rotation=90
     )
     
-    # Add sheet count indicator
-    if sheets_count > 1:
-        ax.text(
-            sheet_width * 0.95, sheet_height * 0.95, f'x{sheets_count}',
-            ha='right', va='top', fontsize=14, color='#CC4444', fontweight='bold'
-        )
+    # Add sheet count indicator (prominent)
+    ax.text(
+        sheet_width * 0.95, sheet_height * 0.95, f'×{sheets_to_cut}',
+        ha='right', va='top', fontsize=16, color='#CC4444', fontweight='bold'
+    )
     
     # Set axis properties
-    ax.set_xlim(-sheet_width*0.15, sheet_width*1.2)
-    ax.set_ylim(-sheet_height*0.2, sheet_height*1.1)
+    ax.set_xlim(-sheet_width*0.12, sheet_width*1.15)
+    ax.set_ylim(-sheet_height*0.15, sheet_height*1.05)
     ax.set_aspect('equal')
     ax.axis('off')
     
-    # Add title with statistics for ONE sheet
-    title = f"Sheet Layout: {sheet_width}\" × {sheet_height}\" | {pieces_placed} panels/sheet | {utilization_pct:.0f}% utilization"
-    ax.set_title(title, fontsize=11, fontweight='bold', pad=10)
+    # Title
+    title = f"{total_panels} panels/sheet | {utilization_pct:.0f}% utilization"
+    ax.set_title(title, fontsize=10, fontweight='bold', pad=5)
     
     plt.tight_layout()
     return fig
 
-def generate_cutting_statistics(sheet_width, sheet_height, pieces_info, saw_kerf=0.125, sheets_count=1):
-    """Calculate cutting statistics similar to CutListOptimizer.
+
+def create_cutting_patterns(optimization_result, saw_kerf=0.125):
+    """Create distinct cutting patterns from optimization results.
     
-    Calculates values for ONE sheet, then multiplies by sheets_count for totals.
+    Each pattern = one sheet configuration that may have MULTIPLE piece types for max utilization.
+    Pieces from different jobs can share the same pattern if it improves efficiency.
     
-    Returns dict with per-sheet and total values.
+    Returns list of patterns, each with:
+    - sheet: The sheet object
+    - pieces: List of piece info dicts (multiple piece types possible)
+    - sheets_to_cut: How many sheets to cut this way
+    - utilization_pct: Sheet utilization
+    - jobs: Set of job numbers included
     """
-    # Calculate for ONE sheet
-    used_area_per_sheet = 0
-    panels_per_sheet = 0
-    total_cuts = 0
-    total_cut_length = 0
+    patterns = []
     
-    for piece_info in pieces_info:
-        piece = piece_info.get('piece')
-        orientation = piece_info.get('orientation', 'Normal')
-        grid = piece_info.get('grid', (1, 1))
-        parts_per_sheet = piece_info.get('parts_per_sheet', 1)
+    for assign in optimization_result.get('assignments', []):
+        sheet = assign.get('sheet')
+        sheets_count = assign.get('sheets_count', 1)
+        pieces_list = assign.get('pieces', [])
         
-        if not piece:
+        if not sheet or not pieces_list:
             continue
         
-        # Determine piece dimensions based on orientation
-        if orientation == "Rotated":
-            piece_w = piece.height
-            piece_h = piece.width
-        else:
-            piece_w = piece.width
-            piece_h = piece.height
+        # Calculate total utilization for this pattern (all pieces combined)
+        total_used_area = 0
+        sheet_area = sheet.width * sheet.height
+        jobs = set()
+        total_panels = 0
         
-        cols, rows = grid
+        for piece_info in pieces_list:
+            piece = piece_info.get('piece')
+            parts_per_sheet = piece_info.get('parts_per_sheet', 1)
+            orientation = piece_info.get('orientation', 'Normal')
+            
+            if not piece:
+                continue
+            
+            jobs.add(piece.job_number)
+            total_panels += parts_per_sheet
+            
+            # Calculate area used by this piece type
+            if orientation == "Rotated":
+                piece_w, piece_h = piece.height, piece.width
+            else:
+                piece_w, piece_h = piece.width, piece.height
+            
+            total_used_area += piece_w * piece_h * parts_per_sheet
         
-        # Calculate area used PER SHEET (use parts_per_sheet, not quantity)
-        used_area_per_sheet += piece_w * piece_h * parts_per_sheet
-        panels_per_sheet += parts_per_sheet
+        utilization_pct = (total_used_area / sheet_area * 100) if sheet_area > 0 else 0
+        waste_pct = 100 - utilization_pct
         
-        # Calculate cuts
-        cuts_for_this_piece = (rows + 1) + (cols + 1) * rows
-        total_cuts += cuts_for_this_piece
-        
-        # Calculate cut length
-        total_cut_length += (rows + 1) * sheet_width + (cols + 1) * rows * piece_h
+        patterns.append({
+            'sheet': sheet,
+            'pieces': pieces_list,
+            'sheets_to_cut': sheets_count,
+            'total_panels': total_panels,
+            'jobs': jobs,
+            'utilization_pct': utilization_pct,
+            'waste_pct': waste_pct,
+            'used_area_per_sheet': total_used_area,
+            'wasted_area_per_sheet': sheet_area - total_used_area,
+            'is_combined': len(pieces_list) > 1  # Multiple piece types on one sheet
+        })
     
-    # Per-sheet calculations
-    sheet_area = sheet_width * sheet_height
-    wasted_area_per_sheet = sheet_area - used_area_per_sheet
-    utilization_pct = (used_area_per_sheet / sheet_area * 100) if sheet_area > 0 else 0
-    waste_pct = 100 - utilization_pct
-    
-    # Totals across all sheets
-    total_used_area = used_area_per_sheet * sheets_count
-    total_wasted_area = wasted_area_per_sheet * sheets_count
-    
-    return {
-        "used_area": used_area_per_sheet,
-        "wasted_area": wasted_area_per_sheet,
-        "utilization_pct": utilization_pct,
-        "waste_pct": waste_pct,
-        "total_cuts": total_cuts * sheets_count,
-        "cut_length": total_cut_length * sheets_count,
-        "panels_per_sheet": panels_per_sheet,
-        "sheets_count": sheets_count,
-        "total_used_area_all_sheets": total_used_area,
-        "total_wasted_area_all_sheets": total_wasted_area
-    }
+    return patterns
 
 # --- GOOGLE SHEETS CONNECTION ---
 def get_google_sheets_client(credentials_json):
@@ -1504,99 +1509,84 @@ if st.session_state.pieces_list:
                         st.subheader("📋 Sheet Assignments")
                         
                         # Create cutting programs grouped by thickness
-                        cutting_programs = create_cutting_programs(optimization_result)
+                        # Create distinct cutting patterns (may combine multiple jobs per sheet)
+                        cutting_patterns = create_cutting_patterns(optimization_result, kerf_setting)
                         
                         # Production Roadmap Section
-                        st.subheader("🏭 Production Roadmap")
-                        st.markdown("**Print this section for production team**")
+                        st.subheader("🏭 Cutting Patterns")
+                        st.markdown("**Each pattern shows how to cut one sheet. Pieces from multiple jobs may share a sheet for maximum utilization.**")
                         
-                        # Unoptimized vs Optimized comparison
-                        unoptimized_cost = unoptimized_result['total_cost']
-                        optimized_cost = optimization_result['total_cost']
-                        optimization_savings = unoptimized_cost - optimized_cost
-                        optimization_savings_pct = (optimization_savings / unoptimized_cost * 100) if unoptimized_cost > 0 else 0
-                        
-                        comp_col1, comp_col2, comp_col3 = st.columns(3)
-                        with comp_col1:
-                            st.metric("Unoptimized Cost", f"${unoptimized_cost:.2f}")
-                        with comp_col2:
-                            st.metric("Optimized Cost", f"${optimized_cost:.2f}", 
-                                     delta=f"-${optimization_savings:.2f}")
-                        with comp_col3:
-                            st.metric("Optimization Savings", f"${optimization_savings:.2f}", 
-                                     delta=f"{optimization_savings_pct:.1f}%")
-                        
-                        # Cutting Programs by Thickness (Setup Groups)
-                        for program_idx, program in enumerate(cutting_programs, 1):
-                            with st.expander(f"🔧 SETUP {program_idx}: {program['thickness_display']} Thickness - {program['sheets_count']} Sheet(s) - ${program['cost']:.2f}", expanded=True):
-                                sheet = program['sheet']
+                        # Summary table of all patterns
+                        if cutting_patterns:
+                            st.markdown("### 📋 Pattern Summary")
+                            pattern_summary = []
+                            total_sheets = 0
+                            for idx, pattern in enumerate(cutting_patterns, 1):
+                                total_sheets += pattern['sheets_to_cut']
+                                # List all piece sizes in this pattern
+                                piece_sizes = [f"{p['piece'].width}×{p['piece'].height}" for p in pattern['pieces']]
+                                jobs_str = ", ".join(sorted(pattern['jobs']))
                                 
-                                # Two column layout: diagram on left, stats on right
-                                diagram_col, stats_col = st.columns([2, 1])
+                                pattern_summary.append({
+                                    "Pattern": f"#{idx}",
+                                    "Piece Sizes": " + ".join(piece_sizes) if len(piece_sizes) <= 3 else f"{len(piece_sizes)} types",
+                                    "Jobs": jobs_str,
+                                    "Panels/Sheet": pattern['total_panels'],
+                                    "Sheets to Cut": pattern['sheets_to_cut'],
+                                    "Utilization": f"{pattern['utilization_pct']:.0f}%",
+                                    "Combined": "✓" if pattern['is_combined'] else ""
+                                })
+                            st.dataframe(pd.DataFrame(pattern_summary), use_container_width=True, hide_index=True)
+                            
+                            combined_count = sum(1 for p in cutting_patterns if p['is_combined'])
+                            if combined_count > 0:
+                                st.success(f"✨ **{combined_count} pattern(s) combine pieces from multiple jobs for better utilization!**")
+                            st.info(f"📦 **Total sheets to cut: {total_sheets}**")
+                        
+                        st.markdown("---")
+                        st.markdown("### 🔧 Cutting Diagrams")
+                        
+                        # Display each cutting pattern with its own diagram
+                        for idx, pattern in enumerate(cutting_patterns):
+                            sheet = pattern['sheet']
+                            jobs_str = ", ".join(sorted(pattern['jobs']))
+                            combined_badge = " 🔗 COMBINED" if pattern['is_combined'] else ""
+                            
+                            with st.expander(f"**Pattern #{idx + 1}** — Cut {pattern['sheets_to_cut']} sheet(s) — {pattern['utilization_pct']:.0f}% utilization{combined_badge}", expanded=True):
                                 
-                                with diagram_col:
-                                    # Generate and display cutting diagram
+                                col1, col2 = st.columns([2, 1])
+                                
+                                with col1:
+                                    # Generate diagram
                                     try:
-                                        fig = generate_cutting_diagram(
-                                            sheet.width, 
-                                            sheet.height, 
-                                            program['pieces'],
+                                        fig = generate_pattern_diagram(
+                                            sheet.width,
+                                            sheet.height,
+                                            pattern['pieces'],
                                             kerf_setting,
-                                            program['sheets_count']
+                                            pattern['sheets_to_cut']
                                         )
                                         st.pyplot(fig)
                                         plt.close(fig)
                                     except Exception as e:
                                         st.warning(f"Could not generate diagram: {e}")
                                 
-                                with stats_col:
-                                    # Calculate and display statistics
-                                    stats = generate_cutting_statistics(
-                                        sheet.width,
-                                        sheet.height,
-                                        program['pieces'],
-                                        kerf_setting,
-                                        program['sheets_count']
-                                    )
+                                with col2:
+                                    st.markdown(f"### ✂️ Cut {pattern['sheets_to_cut']}×")
+                                    st.markdown(f"**Sheet:** {sheet.width}\" × {sheet.height}\"")
+                                    st.markdown(f"**Jobs:** {jobs_str}")
+                                    st.markdown(f"**Panels/sheet:** {pattern['total_panels']}")
+                                    st.markdown(f"**Utilization:** {pattern['utilization_pct']:.0f}%")
+                                    st.markdown(f"**Waste:** {pattern['waste_pct']:.0f}%")
                                     
-                                    st.markdown("##### 📊 Global Statistics")
-                                    st.markdown(f"**Used stock sheets:** {sheet.width}×{sheet.height} x{program['sheets_count']}")
-                                    st.markdown(f"**Total used area:** {stats['total_used_area_all_sheets']:.1f} in² \\ {stats['utilization_pct']:.0f}%")
-                                    st.markdown(f"**Total wasted area:** {stats['total_wasted_area_all_sheets']:.1f} in² \\ {stats['waste_pct']:.0f}%")
-                                    st.markdown(f"**Kerf thickness:** {kerf_setting}\"")
-                                    
-                                    st.markdown("##### 📐 Sheet Statistics")
-                                    st.markdown(f"**Stock sheet:** {sheet.width}×{sheet.height}")
-                                    st.markdown(f"**Qty:** {program['sheets_count']}")
-                                    st.markdown(f"**Used area:** {stats['used_area']:.1f} in² \\ {stats['utilization_pct']:.0f}%")
-                                    st.markdown(f"**Wasted area:** {stats['wasted_area']:.1f} in² \\ {stats['waste_pct']:.0f}%")
-                                    st.markdown(f"**Panels:** {stats['panels_per_sheet']}")
-                                
-                                st.markdown("---")
-                                st.markdown(f"**Program Name:** {program['program_name']}")
-                                st.markdown(f"**Thickness:** {program['thickness_display']}")
-                                st.markdown(f"**Sheet:** {sheet.part_number or 'N/A'} - {sheet.description or ''} ({sheet.width}\" × {sheet.height}\")")
-                                st.markdown(f"**Cut this program {program['sheets_count']} time(s)**")
-                                
-                                # Pieces nested in this program
-                                st.markdown("**Pieces in this program (nested cuts):**")
-                                program_pieces = []
-                                for piece_assign in program['pieces']:
-                                    piece = piece_assign['piece']
-                                    grid = piece_assign.get('grid', (1, 1))
-                                    program_pieces.append({
-                                        "Job #": piece.job_number,
-                                        "Size": f"{piece.width}\" × {piece.height}\"",
-                                        "Quantity": piece_assign['quantity'],
-                                        "Parts/Sheet": piece_assign['parts_per_sheet'],
-                                        "Layout": f"{grid[0]} × {grid[1]}",
-                                        "Orientation": piece_assign['orientation']
-                                    })
-                                st.dataframe(pd.DataFrame(program_pieces), use_container_width=True, hide_index=True)
-                                
-                                # Job summary for this program
-                                jobs_in_program = set(p['piece'].job_number for p in program['pieces'])
-                                st.info(f"📋 **Jobs in this program:** {', '.join(sorted(jobs_in_program))}")
+                                    # Piece breakdown
+                                    st.markdown("---")
+                                    st.markdown("**Pieces in this pattern:**")
+                                    for p_info in pattern['pieces']:
+                                        piece = p_info['piece']
+                                        grid = p_info.get('grid', (1, 1))
+                                        st.markdown(f"- **{piece.width}\" × {piece.height}\"** (Job {piece.job_number})")
+                                        st.markdown(f"  {p_info['parts_per_sheet']} pcs — {grid[0]}×{grid[1]} layout")
                         
                         # Detailed assignments (collapsed by default)
                         with st.expander("📋 Detailed Sheet Assignments"):
