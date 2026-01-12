@@ -182,7 +182,7 @@ def generate_pattern_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
     total_panels = 0
     current_y = 0
     
-    # Draw each piece type - recalculate optimal layout for display orientation
+    # Draw each piece type using advanced mixed-orientation layout
     for piece_idx, piece_info in enumerate(pieces_info):
         piece = piece_info.get('piece')
         parts_per_sheet = piece_info.get('parts_per_sheet', 1)
@@ -190,64 +190,101 @@ def generate_pattern_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
         if not piece:
             continue
         
-        # Recalculate the optimal layout for this piece on the display sheet
-        best_yield, best_orient, best_grid = calculate_parts_per_sheet(
+        # Get the advanced layout for this piece
+        best_yield, best_orient, best_grid, layout_details = calculate_parts_per_sheet(
             display_width, display_height - current_y, 
             piece.width, piece.height, saw_kerf
         )
         
-        # Determine piece dimensions for drawing
-        if best_orient == "Rotated":
-            piece_w = piece.height
-            piece_h = piece.width
-        else:
-            piece_w = piece.width
-            piece_h = piece.height
-        
-        cols, rows = best_grid
         color = piece_colors[piece_idx % len(piece_colors)]
         
-        # Draw pieces in grid layout
-        placed_count = 0
-        
-        for row in range(rows):
-            for col in range(cols):
+        # If we have detailed mixed layout, use it
+        if layout_details and 'rows' in layout_details:
+            for row_layout in layout_details['rows']:
+                piece_size = row_layout['piece_size']
+                piece_w, piece_h = piece_size
+                num_pieces = row_layout['pieces']
+                cols = row_layout['cols']
+                y_offset = row_layout.get('y_offset', 0)
+                
+                # Draw pieces in this row
+                for i in range(num_pieces):
+                    col = i % cols
+                    x = col * (piece_w + saw_kerf)
+                    y = current_y + y_offset
+                    
+                    if x + piece_w <= display_width + 0.01 and y + piece_h <= display_height + 0.01:
+                        # Draw piece rectangle
+                        piece_rect = patches.Rectangle(
+                            (x, y), piece_w, piece_h,
+                            linewidth=1.5, edgecolor='#444444', facecolor=color
+                        )
+                        ax.add_patch(piece_rect)
+                        
+                        # Add small label
+                        label = f"{piece.width}×{piece.height}"
+                        fontsize = min(7, piece_w * 0.25, piece_h * 0.25)
+                        fontsize = max(5, fontsize)
+                        ax.text(
+                            x + piece_w/2, y + piece_h/2, label,
+                            ha='center', va='center', fontsize=fontsize,
+                            fontweight='bold', color='#333333'
+                        )
+                        
+                        total_used_area += piece_w * piece_h
+                        total_panels += 1
+            
+            # Update current_y based on the last row
+            if layout_details['rows']:
+                last_row = layout_details['rows'][-1]
+                last_y = last_row.get('y_offset', 0)
+                last_h = last_row['piece_size'][1]
+                current_y += last_y + last_h + saw_kerf
+        else:
+            # Fall back to simple grid layout
+            if best_orient == "Rotated":
+                piece_w = piece.height
+                piece_h = piece.width
+            else:
+                piece_w = piece.width
+                piece_h = piece.height
+            
+            cols, rows = best_grid
+            placed_count = 0
+            
+            for row in range(rows):
+                for col in range(cols):
+                    if placed_count >= parts_per_sheet:
+                        break
+                    
+                    x = col * (piece_w + saw_kerf)
+                    y = current_y + row * (piece_h + saw_kerf)
+                    
+                    if x + piece_w <= display_width + 0.01 and y + piece_h <= display_height + 0.01:
+                        piece_rect = patches.Rectangle(
+                            (x, y), piece_w, piece_h,
+                            linewidth=1.5, edgecolor='#444444', facecolor=color
+                        )
+                        ax.add_patch(piece_rect)
+                        
+                        label = f"{piece.width}×{piece.height}"
+                        fontsize = min(7, piece_w * 0.25, piece_h * 0.25)
+                        fontsize = max(5, fontsize)
+                        ax.text(
+                            x + piece_w/2, y + piece_h/2, label,
+                            ha='center', va='center', fontsize=fontsize,
+                            fontweight='bold', color='#333333'
+                        )
+                        
+                        placed_count += 1
+                        total_used_area += piece_w * piece_h
+                
                 if placed_count >= parts_per_sheet:
                     break
-                
-                x = col * (piece_w + saw_kerf)
-                y = current_y + row * (piece_h + saw_kerf)
-                
-                # Check if piece fits
-                if x + piece_w <= display_width + 0.01 and y + piece_h <= display_height + 0.01:
-                    # Draw piece rectangle
-                    piece_rect = patches.Rectangle(
-                        (x, y), piece_w, piece_h,
-                        linewidth=1.5, edgecolor='#444444', facecolor=color
-                    )
-                    ax.add_patch(piece_rect)
-                    
-                    # Add small label in piece
-                    label = f"{piece.width}×{piece.height}"
-                    fontsize = min(7, piece_w * 0.25, piece_h * 0.25)
-                    fontsize = max(5, fontsize)
-                    ax.text(
-                        x + piece_w/2, y + piece_h/2, label,
-                        ha='center', va='center', fontsize=fontsize,
-                        fontweight='bold', color='#333333'
-                    )
-                    
-                    placed_count += 1
-                    total_used_area += piece_w * piece_h
             
-            if placed_count >= parts_per_sheet:
-                break
-        
-        total_panels += placed_count
-        
-        # Move Y position for next piece type
-        if placed_count > 0 and rows > 0:
-            current_y += rows * (piece_h + saw_kerf)
+            total_panels += placed_count
+            if placed_count > 0 and rows > 0:
+                current_y += rows * (piece_h + saw_kerf)
     
     # Calculate utilization
     sheet_area = display_width * display_height
@@ -647,78 +684,114 @@ If your spreadsheet isn't in the list above, check:
         return []
 
 # --- OPTIMIZATION ENGINE ---
-def calculate_parts_per_sheet(sheet_w, sheet_h, piece_w, piece_h, saw_kerf=0.125):
-    """Calculate how many pieces fit on a sheet, trying ALL orientations.
+def calculate_parts_per_sheet_mixed(sheet_w, sheet_h, piece_w, piece_h, saw_kerf=0.125):
+    """Advanced bin-packing with mixed orientations.
     
-    Tries all 4 combinations of sheet and piece orientation to maximize yield.
-    Grain direction doesn't matter - goal is always MINIMUM WASTE.
+    Tries to fit pieces with DIFFERENT orientations in different rows for maximum yield.
+    Example: Row 1 might have 5 portrait pieces, Row 2 might have 3 landscape pieces.
     
-    Kerf formula: n pieces need (n-1) kerfs between them
-    n <= (sheet + kerf) / (piece + kerf)
+    Returns: (total_pieces, layout_description, detailed_layout)
     """
-    eff_pw = piece_w + saw_kerf  # effective piece width
-    eff_ph = piece_h + saw_kerf  # effective piece height
+    # Try simple grid layouts first (all same orientation)
+    best_yield = 0
+    best_layout = None
     
-    # Check if piece can fit at all
-    min_piece = min(piece_w, piece_h)
-    max_piece = max(piece_w, piece_h)
-    min_sheet = min(sheet_w, sheet_h)
-    max_sheet = max(sheet_w, sheet_h)
+    # Try all 4 basic grid orientations
+    for sheet_orient in [(sheet_w, sheet_h), (sheet_h, sheet_w)]:
+        sw, sh = sheet_orient
+        for piece_orient in [(piece_w, piece_h), (piece_h, piece_w)]:
+            pw, ph = piece_orient
+            cols = math.floor((sw + saw_kerf) / (pw + saw_kerf))
+            rows = math.floor((sh + saw_kerf) / (ph + saw_kerf))
+            yield_val = cols * rows
+            
+            if yield_val > best_yield:
+                best_yield = yield_val
+                orient_name = "Rotated" if (pw == piece_h and ph == piece_w) else "Normal"
+                best_layout = {
+                    'total': yield_val,
+                    'orientation': orient_name,
+                    'grid': (cols, rows),
+                    'sheet_size': (sw, sh),
+                    'rows': [{'pieces': cols * rows, 'piece_size': (pw, ph), 'cols': cols, 'rows': rows}]
+                }
     
-    if min_piece > max_sheet or max_piece > max_sheet:
-        return 0, "None", (0, 0)
+    # Try MIXED orientation layouts (2-3 rows with different orientations)
+    # This is where we can pack MORE pieces by mixing portrait and landscape
+    for sheet_orient in [(sheet_w, sheet_h), (sheet_h, sheet_w)]:
+        sw, sh = sheet_orient
+        
+        # Try 2-row mixed layouts
+        for piece_orient1 in [(piece_w, piece_h), (piece_h, piece_w)]:
+            pw1, ph1 = piece_orient1
+            
+            # Calculate row 1
+            cols1 = math.floor((sw + saw_kerf) / (pw1 + saw_kerf))
+            if cols1 == 0:
+                continue
+            height1 = ph1
+            
+            # Calculate remaining height for row 2
+            remaining_h = sh - height1 - saw_kerf
+            if remaining_h < min(piece_w, piece_h):
+                continue
+            
+            # Try row 2 with opposite orientation
+            for piece_orient2 in [(piece_w, piece_h), (piece_h, piece_w)]:
+                pw2, ph2 = piece_orient2
+                
+                if ph2 > remaining_h + 0.01:  # Won't fit
+                    continue
+                
+                cols2 = math.floor((sw + saw_kerf) / (pw2 + saw_kerf))
+                
+                total_mixed = cols1 + cols2
+                
+                if total_mixed > best_yield:
+                    best_yield = total_mixed
+                    best_layout = {
+                        'total': total_mixed,
+                        'orientation': 'Mixed',
+                        'grid': (max(cols1, cols2), 2),
+                        'sheet_size': (sw, sh),
+                        'rows': [
+                            {'pieces': cols1, 'piece_size': (pw1, ph1), 'cols': cols1, 'y_offset': 0},
+                            {'pieces': cols2, 'piece_size': (pw2, ph2), 'cols': cols2, 'y_offset': height1 + saw_kerf}
+                        ]
+                    }
     
-    # Try all 4 combinations and pick the best
-    options = []
+    if best_layout:
+        return best_layout['total'], best_layout['orientation'], best_layout['grid'], best_layout
     
-    # Option 1: Sheet (W×H), Piece normal (w×h)
-    cols1 = math.floor((sheet_w + saw_kerf) / eff_pw)
-    rows1 = math.floor((sheet_h + saw_kerf) / eff_ph)
-    if cols1 > 0 and rows1 > 0:
-        options.append((cols1 * rows1, "Normal", (cols1, rows1), sheet_w, sheet_h, piece_w, piece_h))
-    
-    # Option 2: Sheet (W×H), Piece rotated (h×w)
-    cols2 = math.floor((sheet_w + saw_kerf) / eff_ph)
-    rows2 = math.floor((sheet_h + saw_kerf) / eff_pw)
-    if cols2 > 0 and rows2 > 0:
-        options.append((cols2 * rows2, "Rotated", (cols2, rows2), sheet_w, sheet_h, piece_h, piece_w))
-    
-    # Option 3: Sheet rotated (H×W), Piece normal (w×h)
-    cols3 = math.floor((sheet_h + saw_kerf) / eff_pw)
-    rows3 = math.floor((sheet_w + saw_kerf) / eff_ph)
-    if cols3 > 0 and rows3 > 0:
-        options.append((cols3 * rows3, "Normal", (cols3, rows3), sheet_h, sheet_w, piece_w, piece_h))
-    
-    # Option 4: Sheet rotated (H×W), Piece rotated (h×w)
-    cols4 = math.floor((sheet_h + saw_kerf) / eff_ph)
-    rows4 = math.floor((sheet_w + saw_kerf) / eff_pw)
-    if cols4 > 0 and rows4 > 0:
-        options.append((cols4 * rows4, "Rotated", (cols4, rows4), sheet_h, sheet_w, piece_h, piece_w))
-    
-    if not options:
-        return 0, "None", (0, 0)
-    
-    # Pick the option with the most pieces
-    best = max(options, key=lambda x: x[0])
-    return best[0], best[1], best[2]
+    return 0, "None", (0, 0), None
 
-def can_fit_on_sheet(sheet: Sheet, piece: Piece, saw_kerf=0.125) -> Tuple[bool, int, str, Tuple[int, int]]:
+def calculate_parts_per_sheet(sheet_w, sheet_h, piece_w, piece_h, saw_kerf=0.125):
+    """Calculate how many pieces fit on a sheet with advanced mixed-orientation nesting.
+    
+    Returns: (count, orientation, grid, layout_details)
+    """
+    result = calculate_parts_per_sheet_mixed(sheet_w, sheet_h, piece_w, piece_h, saw_kerf)
+    if len(result) == 4:
+        return result
+    return result[0], result[1], result[2], None
+
+def can_fit_on_sheet(sheet: Sheet, piece: Piece, saw_kerf=0.125) -> Tuple[bool, int, str, Tuple[int, int], dict]:
     """Check if a piece can fit on a sheet, considering already used areas.
-    Returns: (can_fit, parts_count, orientation, (cols, rows))
+    Returns: (can_fit, parts_count, orientation, (cols, rows), layout_details)
     """
     # Check thickness match
     if piece.thickness is not None and sheet.thickness is not None:
         if abs(piece.thickness - sheet.thickness) > 0.01:
-            return False, 0, "Thickness mismatch", (0, 0)
+            return False, 0, "Thickness mismatch", (0, 0), None
     
-    parts, orientation, grid = calculate_parts_per_sheet(
+    parts, orientation, grid, layout_details = calculate_parts_per_sheet(
         sheet.width, sheet.height, piece.width, piece.height, saw_kerf
     )
     
     if parts == 0:
-        return False, 0, "Doesn't fit", (0, 0)
+        return False, 0, "Doesn't fit", (0, 0), None
     
-    return True, parts, orientation, grid
+    return True, parts, orientation, grid, layout_details
 
 def optimize_proposed_only(pieces: List[Piece], proposed_sheets: List[Sheet], saw_kerf: float = 0.125) -> Dict:
     """Calculate cost if using ONLY proposed/full sheets (no drop pieces).
@@ -770,7 +843,7 @@ def optimize_proposed_only(pieces: List[Piece], proposed_sheets: List[Sheet], sa
                 
                 best_grid = (0, 0)
                 for sheet in matching_sheets:
-                    can_fit, parts_per_sheet, orientation, grid = can_fit_on_sheet(sheet, piece, SAW_KERF)
+                    can_fit, parts_per_sheet, orientation, grid, layout_details = can_fit_on_sheet(sheet, piece, SAW_KERF)
                     if can_fit and parts_per_sheet > 0:
                         efficiency = parts_per_sheet / sheet.cost if sheet.cost > 0 else parts_per_sheet
                         if efficiency > best_efficiency:
@@ -883,7 +956,7 @@ def optimize_cutting(pieces: List[Piece], available_sheets: List[Sheet], use_act
                         continue
                     
                     # Check if piece fits
-                    can_fit, parts_per_sheet, orientation, grid = can_fit_on_sheet(sheet, piece, SAW_KERF)
+                    can_fit, parts_per_sheet, orientation, grid, layout_details = can_fit_on_sheet(sheet, piece, SAW_KERF)
                     
                     if can_fit and parts_per_sheet > 0:
                         # Calculate how many we can cut from remaining quantity
@@ -970,7 +1043,7 @@ def optimize_cutting(pieces: List[Piece], available_sheets: List[Sheet], use_act
                 
                 # Find best sheet for remaining quantity
                 for sheet in matching_sheets:
-                    can_fit, parts_per_sheet, orientation, grid = can_fit_on_sheet(sheet, piece, SAW_KERF)
+                    can_fit, parts_per_sheet, orientation, grid, layout_details = can_fit_on_sheet(sheet, piece, SAW_KERF)
                     if can_fit and parts_per_sheet > 0:
                         # Calculate efficiency (parts per dollar)
                         efficiency = parts_per_sheet / sheet.cost if sheet.cost > 0 else parts_per_sheet
@@ -1065,7 +1138,7 @@ def calculate_unoptimized_cost(pieces: List[Piece], available_sheets: List[Sheet
                 if abs(piece.thickness - sheet.thickness) > 0.01:
                     continue
             
-            can_fit, parts_per_sheet, orientation, grid = can_fit_on_sheet(sheet, piece, SAW_KERF)
+            can_fit, parts_per_sheet, orientation, grid, layout_details = can_fit_on_sheet(sheet, piece, SAW_KERF)
             if can_fit and parts_per_sheet > 0:
                 sheets_needed = math.ceil(piece.quantity / parts_per_sheet)
                 cost = sheet.cost * sheets_needed
