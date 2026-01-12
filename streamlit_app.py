@@ -205,13 +205,14 @@ def generate_pattern_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
                 piece_w, piece_h = piece_size
                 num_pieces = row_layout['pieces']
                 cols = row_layout['cols']
-                y_offset = row_layout.get('y_offset', 0)
+                y_base_offset = row_layout.get('y_offset', 0)
                 
-                # Draw pieces in this row
+                # Draw pieces - handle multi-row grids properly
                 for i in range(num_pieces):
                     col = i % cols
+                    row_within_section = i // cols  # Which row within this section
                     x = col * (piece_w + saw_kerf)
-                    y = current_y + y_offset
+                    y = current_y + y_base_offset + row_within_section * (piece_h + saw_kerf)
                     
                     if x + piece_w <= display_width + 0.01 and y + piece_h <= display_height + 0.01:
                         # Draw piece rectangle
@@ -234,12 +235,18 @@ def generate_pattern_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
                         total_used_area += piece_w * piece_h
                         total_panels += 1
             
-            # Update current_y based on the last row
+            # Update current_y based on the highest piece drawn
             if layout_details['rows']:
-                last_row = layout_details['rows'][-1]
-                last_y = last_row.get('y_offset', 0)
-                last_h = last_row['piece_size'][1]
-                current_y += last_y + last_h + saw_kerf
+                max_y = 0
+                for row_layout in layout_details['rows']:
+                    piece_h = row_layout['piece_size'][1]
+                    num_pieces = row_layout['pieces']
+                    cols = row_layout['cols']
+                    rows_in_section = math.ceil(num_pieces / cols)
+                    y_offset = row_layout.get('y_offset', 0)
+                    section_height = y_offset + rows_in_section * (piece_h + saw_kerf)
+                    max_y = max(max_y, section_height)
+                current_y += max_y
         else:
             # Fall back to simple grid layout
             if best_orient == "Rotated":
