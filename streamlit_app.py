@@ -227,7 +227,38 @@ This might be a library version issue. Try:
 def fetch_sheet_data(client, spreadsheet_id, sheet_name_or_id, credentials_json=None):
     """Fetch data from a specific sheet in the spreadsheet."""
     try:
-        spreadsheet = client.open_by_key(spreadsheet_id)
+        # Try to open the spreadsheet - this is where permission errors often occur
+        try:
+            spreadsheet = client.open_by_key(spreadsheet_id)
+        except (PermissionError, Exception) as open_error:
+            error_msg = str(open_error)
+            error_type = type(open_error).__name__
+            
+            # If permission error, try to list available spreadsheets to help debug
+            if isinstance(open_error, PermissionError) or "403" in error_msg or "permission" in error_msg.lower():
+                try:
+                    # Try to list spreadsheets we DO have access to
+                    available_spreadsheets = client.list_spreadsheet_files(limit=20)
+                    if available_spreadsheets:
+                        spreadsheet_list = "\n".join([f"  • **{s['name']}** (ID: `{s['id']}`)" for s in available_spreadsheets[:10]])
+                        st.info(f"""
+**📋 Spreadsheets you have access to:**
+{spreadsheet_list}
+
+**⚠️ You're trying to access:** `{spreadsheet_id}`
+
+If your spreadsheet isn't in the list above, check:
+1. Is the Spreadsheet ID correct? (from URL: `/d/SPREADSHEET_ID/edit`)
+2. Is it shared with: `{credentials_json.get('client_email', 'your service account') if credentials_json else 'N/A'}`
+                        """)
+                    else:
+                        st.warning("No spreadsheets found. Make sure your service account has access to at least one spreadsheet.")
+                except Exception as list_error:
+                    # If we can't even list spreadsheets, it's a broader permission issue
+                    pass
+            
+            # Re-raise the original error to be caught by the outer exception handler
+            raise open_error
         
         # Handle sheet name or ID
         if isinstance(sheet_name_or_id, int) or (isinstance(sheet_name_or_id, str) and sheet_name_or_id.replace('gid=', '').isdigit()):
@@ -254,6 +285,8 @@ def fetch_sheet_data(client, spreadsheet_id, sheet_name_or_id, credentials_json=
                         )
                 except Exception as e2:
                     raise ValueError(f"Could not find sheet ID '{sheet_name_or_id}': {str(e2)}")
+            except Exception as e1:
+                raise ValueError(f"Error accessing sheet: {str(e1)}")
         else:
             try:
                 sheet = spreadsheet.worksheet(sheet_name_or_id)
@@ -282,18 +315,35 @@ def fetch_sheet_data(client, spreadsheet_id, sheet_name_or_id, credentials_json=
         except:
             service_account_email = 'your service account email'
         
-        st.error("❌ **Permission Error: Service account doesn't have access to the spreadsheet**")
+        error_msg = str(e)
+        st.error("❌ **Permission Error: Cannot access spreadsheet**")
+        
+        # Show technical details
+        with st.expander("🔍 Debug Information"):
+            st.code(f"Spreadsheet ID: {spreadsheet_id}\nService Account: {service_account_email}\nError: {error_msg}", language='text')
+        
         st.warning(f"""
-**To fix this:**
+**Troubleshooting:**
 
-1. Open your Google Sheet
-2. Click the **"Share"** button (top right)
-3. Add this email address: `{service_account_email}`
-4. Give it **"Viewer"** access (read-only is enough)
-5. Click **"Send"** or **"Share"**
-6. Try again!
+1. **Verify the Spreadsheet ID:**
+   - Open your Google Sheet "MDFSHEETINVENTORY"
+   - Look at the URL: `https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit`
+   - Copy the ID (between `/d/` and `/edit`)
+   - Current ID being used: `{spreadsheet_id}`
 
-**Note:** The service account email can be found in your JSON credentials file under `"client_email"`.
+2. **Check sharing:**
+   - The sheet should be shared with: `{service_account_email}`
+   - You showed it has "Editor" access - that's good!
+
+3. **Common issues:**
+   - Spreadsheet ID has extra characters or spaces
+   - Using the wrong spreadsheet (different one with same name)
+   - Permissions haven't propagated yet (wait 30 seconds)
+
+4. **Try:**
+   - Copy the Spreadsheet ID from the URL again
+   - Paste it fresh in the "Spreadsheet ID" field
+   - Make sure there are no spaces before/after
         """)
         return []
     except Exception as e:
@@ -818,7 +868,7 @@ with st.sidebar:
     
     if credentials_json:
         st.success("✓ Credentials loaded")
-        spreadsheet_id = st.text_input("Spreadsheet ID", value="13wQEWzY7oxtHQX6wAeXn2G6f9Tp4fVBiYBA7Tw2u5aA")
+        spreadsheet_id = st.text_input("Spreadsheet ID", value="1FWbgDKLZ623s_VtmB75HucEr7pl7SO-pm6TzH2ON45s")
         
         st.subheader("Sheet Configuration")
         sheet_tab_name = st.text_input("Sheet Tab Name", value="Sheet1", 
