@@ -390,21 +390,23 @@ def create_cutting_patterns(optimization_result, saw_kerf=0.125):
         
         for piece_info in pieces_list:
             piece = piece_info.get('piece')
-            parts_per_sheet = piece_info.get('parts_per_sheet', 1)
+            # Use 'quantity' (actual pieces on this sheet) not 'parts_per_sheet' (theoretical if alone)
+            # For combined patterns, parts_per_sheet might be the "if alone" value
+            actual_pieces_on_sheet = piece_info.get('quantity', piece_info.get('parts_per_sheet', 1))
             orientation = piece_info.get('orientation', 'Normal')
             
             if not piece:
                 continue
             
             jobs.add(piece.job_number)
-            total_panels += parts_per_sheet
+            total_panels += actual_pieces_on_sheet
             
             if orientation == "Rotated":
                 piece_w, piece_h = piece.height, piece.width
             else:
                 piece_w, piece_h = piece.width, piece.height
             
-            total_used_area += piece_w * piece_h * parts_per_sheet
+            total_used_area += piece_w * piece_h * actual_pieces_on_sheet
         
         utilization_pct = (total_used_area / sheet_area * 100) if sheet_area > 0 else 0
         waste_pct = 100 - utilization_pct
