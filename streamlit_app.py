@@ -133,6 +133,8 @@ def safe_float(value, default=0.0):
 def generate_pattern_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.125, sheets_to_cut=1):
     """Generate a visual cutting diagram for a pattern (may have MULTIPLE piece types).
     
+    Automatically determines optimal sheet orientation for display.
+    
     Args:
         sheet_width: Width of the sheet in inches
         sheet_height: Height of the sheet in inches  
@@ -143,10 +145,20 @@ def generate_pattern_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
     Returns:
         matplotlib figure
     """
+    # Determine optimal display orientation based on pieces layout
+    # Recalculate the best arrangement for each piece
+    display_width = sheet_width
+    display_height = sheet_height
+    
+    # Check if landscape orientation would be better for display
+    # (wider than tall typically displays better)
+    if sheet_height > sheet_width:
+        display_width, display_height = sheet_height, sheet_width
+    
     # Create figure with appropriate aspect ratio
     fig_width = 8
-    fig_height = fig_width * (sheet_height / sheet_width) if sheet_width > 0 else 5
-    fig_height = min(max(fig_height, 3), 8)
+    fig_height = fig_width * (display_height / display_width) if display_width > 0 else 5
+    fig_height = min(max(fig_height, 2.5), 6)
     
     fig, ax = plt.subplots(1, 1, figsize=(fig_width, fig_height))
     
@@ -161,34 +173,38 @@ def generate_pattern_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
     
     # Draw sheet outline (light gray background)
     sheet_rect = patches.Rectangle(
-        (0, 0), sheet_width, sheet_height,
+        (0, 0), display_width, display_height,
         linewidth=2, edgecolor='#333333', facecolor='#F5F5F5'
     )
     ax.add_patch(sheet_rect)
     
     total_used_area = 0
     total_panels = 0
-    current_y = 0  # Track vertical position for stacking different piece types
+    current_y = 0
     
-    # Draw each piece type
+    # Draw each piece type - recalculate optimal layout for display orientation
     for piece_idx, piece_info in enumerate(pieces_info):
         piece = piece_info.get('piece')
-        orientation = piece_info.get('orientation', 'Normal')
-        grid = piece_info.get('grid', (1, 1))
         parts_per_sheet = piece_info.get('parts_per_sheet', 1)
         
         if not piece:
             continue
         
-        # Determine piece dimensions based on orientation
-        if orientation == "Rotated":
+        # Recalculate the optimal layout for this piece on the display sheet
+        best_yield, best_orient, best_grid = calculate_parts_per_sheet(
+            display_width, display_height - current_y, 
+            piece.width, piece.height, saw_kerf
+        )
+        
+        # Determine piece dimensions for drawing
+        if best_orient == "Rotated":
             piece_w = piece.height
             piece_h = piece.width
         else:
             piece_w = piece.width
             piece_h = piece.height
         
-        cols, rows = grid
+        cols, rows = best_grid
         color = piece_colors[piece_idx % len(piece_colors)]
         
         # Draw pieces in grid layout
@@ -203,7 +219,7 @@ def generate_pattern_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
                 y = current_y + row * (piece_h + saw_kerf)
                 
                 # Check if piece fits
-                if x + piece_w <= sheet_width + 0.01 and y + piece_h <= sheet_height + 0.01:
+                if x + piece_w <= display_width + 0.01 and y + piece_h <= display_height + 0.01:
                     # Draw piece rectangle
                     piece_rect = patches.Rectangle(
                         (x, y), piece_w, piece_h,
@@ -213,7 +229,7 @@ def generate_pattern_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
                     
                     # Add small label in piece
                     label = f"{piece.width}×{piece.height}"
-                    fontsize = min(8, piece_w * 0.3, piece_h * 0.3)
+                    fontsize = min(7, piece_w * 0.25, piece_h * 0.25)
                     fontsize = max(5, fontsize)
                     ax.text(
                         x + piece_w/2, y + piece_h/2, label,
@@ -229,42 +245,42 @@ def generate_pattern_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
         
         total_panels += placed_count
         
-        # Move Y position for next piece type (stack vertically)
-        if placed_count > 0:
+        # Move Y position for next piece type
+        if placed_count > 0 and rows > 0:
             current_y += rows * (piece_h + saw_kerf)
     
     # Calculate utilization
-    sheet_area = sheet_width * sheet_height
+    sheet_area = display_width * display_height
     utilization_pct = (total_used_area / sheet_area * 100) if sheet_area > 0 else 0
     
     # Add dimension labels
     ax.annotate(
-        '', xy=(sheet_width, -sheet_height*0.06), xytext=(0, -sheet_height*0.06),
+        '', xy=(display_width, -display_height*0.08), xytext=(0, -display_height*0.08),
         arrowprops=dict(arrowstyle='<->', color='#CC4444', lw=1.5)
     )
     ax.text(
-        sheet_width/2, -sheet_height*0.10, f'{sheet_width}"',
+        display_width/2, -display_height*0.14, f'{display_width}"',
         ha='center', va='top', fontsize=9, color='#CC4444', fontweight='bold'
     )
     
     ax.annotate(
-        '', xy=(sheet_width*1.06, sheet_height), xytext=(sheet_width*1.06, 0),
+        '', xy=(display_width*1.08, display_height), xytext=(display_width*1.08, 0),
         arrowprops=dict(arrowstyle='<->', color='#CC4444', lw=1.5)
     )
     ax.text(
-        sheet_width*1.10, sheet_height/2, f'{sheet_height}"',
+        display_width*1.12, display_height/2, f'{display_height}"',
         ha='left', va='center', fontsize=9, color='#CC4444', fontweight='bold', rotation=90
     )
     
     # Add sheet count indicator (prominent)
     ax.text(
-        sheet_width * 0.95, sheet_height * 0.95, f'×{sheets_to_cut}',
-        ha='right', va='top', fontsize=16, color='#CC4444', fontweight='bold'
+        display_width * 0.98, display_height * 0.98, f'x{sheets_to_cut}',
+        ha='right', va='top', fontsize=14, color='#CC4444', fontweight='bold'
     )
     
     # Set axis properties
-    ax.set_xlim(-sheet_width*0.12, sheet_width*1.15)
-    ax.set_ylim(-sheet_height*0.15, sheet_height*1.05)
+    ax.set_xlim(-display_width*0.08, display_width*1.18)
+    ax.set_ylim(-display_height*0.18, display_height*1.05)
     ax.set_aspect('equal')
     ax.axis('off')
     
@@ -632,34 +648,59 @@ If your spreadsheet isn't in the list above, check:
 
 # --- OPTIMIZATION ENGINE ---
 def calculate_parts_per_sheet(sheet_w, sheet_h, piece_w, piece_h, saw_kerf=0.125):
-    """Calculate how many pieces fit on a sheet in both orientations.
+    """Calculate how many pieces fit on a sheet, trying ALL orientations.
+    
+    Tries all 4 combinations of sheet and piece orientation to maximize yield.
+    Grain direction doesn't matter - goal is always MINIMUM WASTE.
     
     Kerf formula: n pieces need (n-1) kerfs between them
-    n * piece + (n-1) * kerf <= sheet
     n <= (sheet + kerf) / (piece + kerf)
     """
-    eff_w = piece_w + saw_kerf
-    eff_h = piece_h + saw_kerf
+    eff_pw = piece_w + saw_kerf  # effective piece width
+    eff_ph = piece_h + saw_kerf  # effective piece height
     
-    if piece_w > sheet_w and piece_w > sheet_h:
+    # Check if piece can fit at all
+    min_piece = min(piece_w, piece_h)
+    max_piece = max(piece_w, piece_h)
+    min_sheet = min(sheet_w, sheet_h)
+    max_sheet = max(sheet_w, sheet_h)
+    
+    if min_piece > max_sheet or max_piece > max_sheet:
         return 0, "None", (0, 0)
-    if piece_h > sheet_w and piece_h > sheet_h:
+    
+    # Try all 4 combinations and pick the best
+    options = []
+    
+    # Option 1: Sheet (W×H), Piece normal (w×h)
+    cols1 = math.floor((sheet_w + saw_kerf) / eff_pw)
+    rows1 = math.floor((sheet_h + saw_kerf) / eff_ph)
+    if cols1 > 0 and rows1 > 0:
+        options.append((cols1 * rows1, "Normal", (cols1, rows1), sheet_w, sheet_h, piece_w, piece_h))
+    
+    # Option 2: Sheet (W×H), Piece rotated (h×w)
+    cols2 = math.floor((sheet_w + saw_kerf) / eff_ph)
+    rows2 = math.floor((sheet_h + saw_kerf) / eff_pw)
+    if cols2 > 0 and rows2 > 0:
+        options.append((cols2 * rows2, "Rotated", (cols2, rows2), sheet_w, sheet_h, piece_h, piece_w))
+    
+    # Option 3: Sheet rotated (H×W), Piece normal (w×h)
+    cols3 = math.floor((sheet_h + saw_kerf) / eff_pw)
+    rows3 = math.floor((sheet_w + saw_kerf) / eff_ph)
+    if cols3 > 0 and rows3 > 0:
+        options.append((cols3 * rows3, "Normal", (cols3, rows3), sheet_h, sheet_w, piece_w, piece_h))
+    
+    # Option 4: Sheet rotated (H×W), Piece rotated (h×w)
+    cols4 = math.floor((sheet_h + saw_kerf) / eff_ph)
+    rows4 = math.floor((sheet_w + saw_kerf) / eff_pw)
+    if cols4 > 0 and rows4 > 0:
+        options.append((cols4 * rows4, "Rotated", (cols4, rows4), sheet_h, sheet_w, piece_h, piece_w))
+    
+    if not options:
         return 0, "None", (0, 0)
     
-    # Normal orientation: piece_w along sheet_w, piece_h along sheet_h
-    cols_norm = math.floor((sheet_w + saw_kerf) / eff_w)
-    rows_norm = math.floor((sheet_h + saw_kerf) / eff_h)
-    yield_norm = cols_norm * rows_norm
-    
-    # Rotated orientation: piece_h along sheet_w, piece_w along sheet_h
-    cols_rot = math.floor((sheet_w + saw_kerf) / eff_h)
-    rows_rot = math.floor((sheet_h + saw_kerf) / eff_w)
-    yield_rot = cols_rot * rows_rot
-    
-    if yield_norm >= yield_rot:
-        return yield_norm, "Normal", (cols_norm, rows_norm)
-    else:
-        return yield_rot, "Rotated", (cols_rot, rows_rot)
+    # Pick the option with the most pieces
+    best = max(options, key=lambda x: x[0])
+    return best[0], best[1], best[2]
 
 def can_fit_on_sheet(sheet: Sheet, piece: Piece, saw_kerf=0.125) -> Tuple[bool, int, str, Tuple[int, int]]:
     """Check if a piece can fit on a sheet, considering already used areas.
