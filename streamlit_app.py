@@ -452,8 +452,12 @@ def create_cutting_patterns(optimization_result, saw_kerf=0.125):
         pattern['is_combined'] = len(pattern['pieces']) > 1
         unique_patterns.append(pattern)
     
-    # Sort by sheets_to_cut (most common patterns first)
-    unique_patterns.sort(key=lambda p: -p['sheets_to_cut'])
+    # Sort by thickness FIRST (to group same thickness together for operators),
+    # then by sheets_to_cut (most common patterns first within each thickness)
+    unique_patterns.sort(key=lambda p: (
+        p['sheet'].thickness if p['sheet'].thickness else 999,  # Thickness first
+        -p['sheets_to_cut']  # Then by quantity (descending)
+    ))
     
     return unique_patterns
 
@@ -563,27 +567,34 @@ def generate_cutting_plan_pdf(cutting_patterns, saw_kerf=0.125, total_cost=0):
     elements.append(summary_table)
     elements.append(Spacer(1, 0.3*inch))
     
-    # Pattern Summary Table
-    elements.append(Paragraph("PATTERN SUMMARY", heading_style))
+    # Pattern Summary Table (grouped by thickness)
+    elements.append(Paragraph("PATTERN SUMMARY (Grouped by Thickness)", heading_style))
+    elements.append(Spacer(1, 0.1*inch))
     
-    pattern_summary_data = [['Pattern', 'Sheets to Cut', 'Panels/Sheet', 'Jobs', 'Utilization']]
+    note_style = ParagraphStyle('Note', parent=styles['Normal'], fontSize=10, textColor=colors.HexColor('#666666'))
+    elements.append(Paragraph("Note: Patterns organized by thickness to minimize machine changeover time.", note_style))
+    elements.append(Spacer(1, 0.1*inch))
+    
+    pattern_summary_data = [['Pattern', 'Thickness', 'Sheets', 'Panels/Sheet', 'Jobs', 'Utilization']]
     for idx, pattern in enumerate(cutting_patterns, 1):
         jobs_str = ", ".join(sorted(pattern['jobs']))
+        thickness = pattern['sheet'].thickness if pattern['sheet'].thickness else 0
         pattern_summary_data.append([
             f"#{idx}",
+            f"{thickness:.4f}\"",
             str(pattern['sheets_to_cut']),
             str(pattern['total_panels']),
             jobs_str,
             f"{pattern['utilization_pct']:.0f}%"
         ])
     
-    pattern_table = Table(pattern_summary_data, colWidths=[0.6*inch, 1*inch, 1*inch, 1.5*inch, 1*inch])
+    pattern_table = Table(pattern_summary_data, colWidths=[0.5*inch, 0.8*inch, 0.7*inch, 0.9*inch, 1.5*inch, 0.9*inch])
     pattern_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f4788')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 11),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
         ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
         ('TOPPADDING', (0, 0), (-1, 0), 10),
         ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
@@ -596,8 +607,47 @@ def generate_cutting_plan_pdf(cutting_patterns, saw_kerf=0.125, total_cost=0):
     elements.append(PageBreak())
     
     # Individual Pattern Pages
+    current_thickness_pdf = None
+    
     for idx, pattern in enumerate(cutting_patterns, 1):
         sheet = pattern['sheet']
+        thickness = sheet.thickness if sheet.thickness else 0
+        
+        # Add thickness group header when thickness changes
+        if thickness != current_thickness_pdf:
+            current_thickness_pdf = thickness
+            
+            # Add page break before new thickness group (except first)
+            if idx > 1:
+                elements.append(PageBreak())
+            
+            # Thickness group header
+            thickness_header_style = ParagraphStyle(
+                'ThicknessHeader',
+                parent=styles['Heading1'],
+                fontSize=18,
+                textColor=colors.HexColor('#1f4788'),
+                spaceAfter=12,
+                spaceBefore=12,
+                alignment=1  # Center
+            )
+            elements.append(Paragraph(f"MATERIAL THICKNESS: {thickness:.4f}\" ({thickness * 25.4:.2f}mm)", thickness_header_style))
+            
+            # Note about grouping
+            note_box_data = [['Run all patterns in this thickness group together to minimize machine changeover time.']]
+            note_box = Table(note_box_data, colWidths=[6.5*inch])
+            note_box.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#e3f2fd')),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 11),
+                ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#1976d2')),
+                ('TOPPADDING', (0, 0), (-1, -1), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+                ('BOX', (0, 0), (-1, -1), 2, colors.HexColor('#1976d2'))
+            ]))
+            elements.append(note_box)
+            elements.append(Spacer(1, 0.3*inch))
         
         # Pattern Header
         elements.append(Paragraph(f"PATTERN #{idx}", title_style))
@@ -613,6 +663,7 @@ def generate_cutting_plan_pdf(cutting_patterns, saw_kerf=0.125, total_cost=0):
         # Pattern info table
         info_data = [
             ['Sheet Size:', f"{sheet.width}\" × {sheet.height}\""],
+            ['Material Thickness:', f"{thickness:.4f}\" ({thickness * 25.4:.2f}mm)"],
             ['Panels per Sheet:', str(pattern['total_panels'])],
             ['Jobs:', jobs_str],
             ['Utilization:', f"{pattern['utilization_pct']:.0f}%"],
@@ -2095,7 +2146,9 @@ if st.session_state.pieces_list:
                         
                         # Summary table of all patterns
                         if cutting_patterns:
-                            st.markdown("### 📋 Pattern Summary")
+                            st.markdown("### 📋 Pattern Summary (Grouped by Thickness)")
+                            st.info("💡 **Patterns are organized by material thickness to minimize machine changeover time.**")
+                            
                             pattern_summary = []
                             total_sheets = 0
                             total_est_time = 0
@@ -2106,12 +2159,17 @@ if st.session_state.pieces_list:
                                 piece_sizes = [f"{p['piece'].width}×{p['piece'].height}" for p in pattern['pieces']]
                                 jobs_str = ", ".join(sorted(pattern['jobs']))
                                 
+                                # Get thickness
+                                thickness = pattern['sheet'].thickness if pattern['sheet'].thickness else 0
+                                thickness_display = f"{thickness:.4f}\""
+                                
                                 # Calculate production time
                                 timing = calculate_production_time(pattern, kerf_setting)
                                 total_est_time += timing['total_time_min']
                                 
                                 pattern_summary.append({
                                     "Pattern": f"#{idx}",
+                                    "Thickness": thickness_display,
                                     "Piece Sizes": " + ".join(piece_sizes) if len(piece_sizes) <= 3 else f"{len(piece_sizes)} types",
                                     "Jobs": jobs_str,
                                     "Panels/Sheet": pattern['total_panels'],
@@ -2161,8 +2219,20 @@ if st.session_state.pieces_list:
                         st.markdown("### 🔧 Cutting Diagrams")
                         
                         # Display each cutting pattern with its own diagram
+                        # Group by thickness with headers
+                        current_thickness = None
+                        
                         for idx, pattern in enumerate(cutting_patterns):
                             sheet = pattern['sheet']
+                            thickness = sheet.thickness if sheet.thickness else 0
+                            
+                            # Show thickness group header when thickness changes
+                            if thickness != current_thickness:
+                                current_thickness = thickness
+                                st.markdown("---")
+                                st.markdown(f"## 📏 Material Thickness: {thickness:.4f}\" ({thickness * 25.4:.2f}mm)")
+                                st.info("🔄 **Run all patterns in this thickness group together to minimize machine changeover time.**")
+                            
                             jobs_str = ", ".join(sorted(pattern['jobs']))
                             combined_badge = " 🔗 COMBINED" if pattern['is_combined'] else ""
                             drop_badge = ""
@@ -2201,7 +2271,9 @@ if st.session_state.pieces_list:
                                         else:
                                             st.info(f"💰 **DROP PIECE** - Cost: ${sheet.cost:.2f}")
                                     
-                                    st.markdown(f"**Sheet:** {sheet.width}\" × {sheet.height}\"")
+                                    st.markdown(f"**Sheet Size:** {sheet.width}\" × {sheet.height}\"")
+                                    thickness = sheet.thickness if sheet.thickness else 0
+                                    st.markdown(f"**📏 Thickness:** {thickness:.4f}\" ({thickness * 25.4:.2f}mm)")
                                     if sheet.part_number:
                                         st.markdown(f"**Part #:** {sheet.part_number}")
                                     st.markdown(f"**Jobs:** {jobs_str}")
