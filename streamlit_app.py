@@ -1542,13 +1542,54 @@ def create_cutting_programs(optimization_result: Dict) -> List[Dict]:
     
     return program_list
 
+# --- PASSWORD PROTECTION ---
+def check_password():
+    """Returns `True` if the user has entered the correct password."""
+    
+    # Initialize session state
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+    
+    # If already authenticated, return True
+    if st.session_state.authenticated:
+        return True
+    
+    # Show login form
+    st.title("🔒 MDF Cutting Optimizer - Login")
+    st.markdown("Please enter the password to access the application.")
+    
+    with st.form("login_form"):
+        password = st.text_input("Password", type="password", key="password_input")
+        submit = st.form_submit_button("Login")
+        
+        if submit:
+            if password == "Exalt123":
+                st.session_state.authenticated = True
+                st.success("✅ Login successful! Redirecting...")
+                st.rerun()
+            else:
+                st.error("❌ Incorrect password. Please try again.")
+    
+    return False
+
 # --- MAIN APP ---
+# Check authentication before showing the app
+if not check_password():
+    st.stop()
+
 st.title("🪵 MDF Cutting Optimizer - Advanced")
 st.markdown("Optimize cutting across multiple jobs with actual and proposed sheets, including drop piece optimization.")
 
 # Sidebar for configuration
 with st.sidebar:
     st.header("⚙️ Configuration")
+    
+    # Logout button at top of sidebar
+    if st.button("🚪 Logout", type="secondary"):
+        st.session_state.authenticated = False
+        st.rerun()
+    
+    st.markdown("---")
     
     # Google Sheets setup
     with st.expander("❓ How to Get JSON Credentials", expanded=False):
