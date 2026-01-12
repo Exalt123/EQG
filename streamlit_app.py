@@ -668,36 +668,30 @@ def generate_cutting_plan_pdf(cutting_patterns, saw_kerf=0.125, total_cost=0):
         elements.append(operator_table)
         elements.append(Spacer(1, 0.15*inch))
         
-        # OPERATOR TRACKING FORM
+        # OPERATOR TRACKING FORM - Simple line format
         elements.append(Paragraph("OPERATOR TRACKING (Fill in after cutting):", heading_style))
-        tracking_data = [
-            ['Operator Name:', '___________________________', 'Date:', '_______________'],
-            ['Actual Sheets Cut:', '__________', 'Actual Time (min):', '__________'],
-            ['Notes/Issues:', ''],
-            ['', '']
-        ]
+        elements.append(Spacer(1, 0.1*inch))
         
-        tracking_table = Table(tracking_data, colWidths=[1.6*inch, 2*inch, 1.6*inch, 1.6*inch])
-        tracking_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (1, 1), colors.HexColor('#f0f0f0')),
-            ('BACKGROUND', (2, 0), (3, 1), colors.HexColor('#f0f0f0')),
-            ('BACKGROUND', (0, 2), (-1, -1), colors.white),
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTNAME', (2, 0), (2, 1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 11),
-            ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
-            ('ALIGN', (2, 0), (2, 1), 'RIGHT'),
-            ('ALIGN', (1, 0), (1, -1), 'LEFT'),
-            ('ALIGN', (3, 0), (3, -1), 'LEFT'),
-            ('SPAN', (1, 2), (3, 3)),  # Notes section spans all columns
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
-            ('TOPPADDING', (0, 0), (-1, -1), 12),
-            ('LEFTPADDING', (0, 0), (-1, -1), 8),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black)
-        ]))
-        elements.append(tracking_table)
+        tracking_style = ParagraphStyle(
+            'Tracking',
+            parent=styles['Normal'],
+            fontSize=12,
+            leading=22,
+            spaceAfter=8
+        )
+        
+        elements.append(Paragraph("<b>Operator Name:</b> _____________________________________________", tracking_style))
+        elements.append(Paragraph("<b>Date:</b> _____________________________________________", tracking_style))
+        elements.append(Paragraph("<b>Actual Sheets Cut:</b> _____________________________________________", tracking_style))
+        elements.append(Paragraph("<b>Actual Time (min):</b> _____________________________________________", tracking_style))
+        elements.append(Spacer(1, 0.1*inch))
+        elements.append(Paragraph("<b>Notes/Issues:</b>", tracking_style))
+        elements.append(Spacer(1, 0.05*inch))
+        
+        # Add lines for notes
+        for _ in range(3):
+            elements.append(Paragraph("_________________________________________________________________", tracking_style))
+        
         elements.append(Spacer(1, 0.2*inch))
         
         # Generate and add cutting diagram
