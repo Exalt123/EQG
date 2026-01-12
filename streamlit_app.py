@@ -279,17 +279,18 @@ def generate_pattern_diagram(sheet_width, sheet_height, pieces_info, saw_kerf=0.
 def create_cutting_patterns(optimization_result, saw_kerf=0.125):
     """Create distinct cutting patterns from optimization results.
     
-    Each pattern = one sheet configuration that may have MULTIPLE piece types for max utilization.
-    Pieces from different jobs can share the same pattern if it improves efficiency.
+    CONSOLIDATES identical patterns - if 30 sheets have the same layout, 
+    show ONE pattern with "×30" instead of 30 separate patterns.
     
-    Returns list of patterns, each with:
+    Returns list of unique patterns, each with:
     - sheet: The sheet object
     - pieces: List of piece info dicts (multiple piece types possible)
-    - sheets_to_cut: How many sheets to cut this way
+    - sheets_to_cut: TOTAL sheets to cut with this pattern
     - utilization_pct: Sheet utilization
     - jobs: Set of job numbers included
     """
-    patterns = []
+    # First pass: collect all patterns
+    raw_patterns = []
     
     for assign in optimization_result.get('assignments', []):
         sheet = assign.get('sheet')
@@ -299,7 +300,29 @@ def create_cutting_patterns(optimization_result, saw_kerf=0.125):
         if not sheet or not pieces_list:
             continue
         
-        # Calculate total utilization for this pattern (all pieces combined)
+        # Create a signature for this pattern to identify duplicates
+        # Signature = sheet size + sorted list of (piece_size, parts_per_sheet, orientation)
+        piece_signatures = []
+        for piece_info in pieces_list:
+            piece = piece_info.get('piece')
+            if piece:
+                piece_signatures.append((
+                    piece.width,
+                    piece.height,
+                    piece_info.get('parts_per_sheet', 1),
+                    piece_info.get('orientation', 'Normal'),
+                    tuple(piece_info.get('grid', (1, 1)))
+                ))
+        piece_signatures.sort()
+        
+        pattern_signature = (
+            sheet.width,
+            sheet.height,
+            sheet.thickness,
+            tuple(piece_signatures)
+        )
+        
+        # Calculate stats for this pattern
         total_used_area = 0
         sheet_area = sheet.width * sheet.height
         jobs = set()
@@ -316,7 +339,6 @@ def create_cutting_patterns(optimization_result, saw_kerf=0.125):
             jobs.add(piece.job_number)
             total_panels += parts_per_sheet
             
-            # Calculate area used by this piece type
             if orientation == "Rotated":
                 piece_w, piece_h = piece.height, piece.width
             else:
@@ -327,7 +349,8 @@ def create_cutting_patterns(optimization_result, saw_kerf=0.125):
         utilization_pct = (total_used_area / sheet_area * 100) if sheet_area > 0 else 0
         waste_pct = 100 - utilization_pct
         
-        patterns.append({
+        raw_patterns.append({
+            'signature': pattern_signature,
             'sheet': sheet,
             'pieces': pieces_list,
             'sheets_to_cut': sheets_count,
@@ -337,10 +360,32 @@ def create_cutting_patterns(optimization_result, saw_kerf=0.125):
             'waste_pct': waste_pct,
             'used_area_per_sheet': total_used_area,
             'wasted_area_per_sheet': sheet_area - total_used_area,
-            'is_combined': len(pieces_list) > 1  # Multiple piece types on one sheet
         })
     
-    return patterns
+    # Second pass: consolidate identical patterns
+    consolidated = {}
+    for pattern in raw_patterns:
+        sig = pattern['signature']
+        if sig in consolidated:
+            # Same pattern - add sheets count and merge jobs
+            consolidated[sig]['sheets_to_cut'] += pattern['sheets_to_cut']
+            consolidated[sig]['jobs'].update(pattern['jobs'])
+        else:
+            # New unique pattern
+            consolidated[sig] = pattern.copy()
+            consolidated[sig]['jobs'] = set(pattern['jobs'])
+    
+    # Convert to list and add is_combined flag
+    unique_patterns = []
+    for pattern in consolidated.values():
+        del pattern['signature']  # Remove internal signature
+        pattern['is_combined'] = len(pattern['pieces']) > 1
+        unique_patterns.append(pattern)
+    
+    # Sort by sheets_to_cut (most common patterns first)
+    unique_patterns.sort(key=lambda p: -p['sheets_to_cut'])
+    
+    return unique_patterns
 
 # --- GOOGLE SHEETS CONNECTION ---
 def get_google_sheets_client(credentials_json):
