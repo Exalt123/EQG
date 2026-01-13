@@ -575,33 +575,57 @@ def generate_cutting_plan_pdf(cutting_patterns, saw_kerf=0.125, total_cost=0):
     elements.append(Paragraph("Note: Patterns organized by thickness to minimize machine changeover time.", note_style))
     elements.append(Spacer(1, 0.1*inch))
     
-    pattern_summary_data = [['Pattern', 'Thickness', 'Sheets', 'Panels/Sheet', 'Jobs', 'Utilization']]
+    # Create table with Paragraph objects for proper word wrapping
+    cell_style = ParagraphStyle(
+        'CellStyle',
+        parent=styles['Normal'],
+        fontSize=9,
+        alignment=1,  # Center
+        leading=11
+    )
+    
+    header_style = ParagraphStyle(
+        'HeaderStyle',
+        parent=styles['Normal'],
+        fontSize=10,
+        alignment=1,  # Center
+        textColor=colors.whitesmoke,
+        fontName='Helvetica-Bold'
+    )
+    
+    pattern_summary_data = [[
+        Paragraph('Pattern', header_style),
+        Paragraph('Thickness', header_style),
+        Paragraph('Sheets', header_style),
+        Paragraph('Panels/<br/>Sheet', header_style),
+        Paragraph('Jobs', header_style),
+        Paragraph('Utilization', header_style)
+    ]]
+    
     for idx, pattern in enumerate(cutting_patterns, 1):
         jobs_str = ", ".join(sorted(pattern['jobs']))
         thickness = pattern['sheet'].thickness if pattern['sheet'].thickness else 0
         pattern_summary_data.append([
-            f"#{idx}",
-            f"{thickness:.4f}\"",
-            str(pattern['sheets_to_cut']),
-            str(pattern['total_panels']),
-            jobs_str,
-            f"{pattern['utilization_pct']:.0f}%"
+            Paragraph(f"#{idx}", cell_style),
+            Paragraph(f"{thickness:.4f}\"", cell_style),
+            Paragraph(str(pattern['sheets_to_cut']), cell_style),
+            Paragraph(str(pattern['total_panels']), cell_style),
+            Paragraph(jobs_str, cell_style),  # Will wrap if too long
+            Paragraph(f"{pattern['utilization_pct']:.0f}%", cell_style)
         ])
     
-    pattern_table = Table(pattern_summary_data, colWidths=[0.5*inch, 0.8*inch, 0.7*inch, 0.9*inch, 1.5*inch, 0.9*inch])
+    # Increased column widths and better proportions
+    pattern_table = Table(pattern_summary_data, colWidths=[0.6*inch, 0.9*inch, 0.7*inch, 0.9*inch, 2.0*inch, 0.9*inch])
     pattern_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f4788')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 10),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-        ('TOPPADDING', (0, 0), (-1, 0), 10),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('FONTSIZE', (0, 1), (-1, -1), 9),
-        ('TOPPADDING', (0, 1), (-1, -1), 6),
-        ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
     ]))
     elements.append(pattern_table)
     elements.append(PageBreak())
@@ -660,33 +684,51 @@ def generate_cutting_plan_pdf(cutting_patterns, saw_kerf=0.125, total_cost=0):
         # Calculate production timing
         timing = calculate_production_time(pattern, saw_kerf)
         
-        # Pattern info table
+        # Pattern info table with word wrapping
+        info_label_style = ParagraphStyle(
+            'InfoLabel',
+            parent=styles['Normal'],
+            fontSize=11,
+            fontName='Helvetica-Bold',
+            alignment=0  # Left
+        )
+        
+        info_value_style = ParagraphStyle(
+            'InfoValue',
+            parent=styles['Normal'],
+            fontSize=11,
+            alignment=0,  # Left
+            leading=13
+        )
+        
         info_data = [
-            ['Sheet Size:', f"{sheet.width}\" × {sheet.height}\""],
-            ['Material Thickness:', f"{thickness:.4f}\" ({thickness * 25.4:.2f}mm)"],
-            ['Panels per Sheet:', str(pattern['total_panels'])],
-            ['Jobs:', jobs_str],
-            ['Utilization:', f"{pattern['utilization_pct']:.0f}%"],
-            ['Waste:', f"{pattern['waste_pct']:.0f}%"]
+            [Paragraph('Sheet Size:', info_label_style), Paragraph(f"{sheet.width}\" × {sheet.height}\"", info_value_style)],
+            [Paragraph('Material Thickness:', info_label_style), Paragraph(f"{thickness:.4f}\" ({thickness * 25.4:.2f}mm)", info_value_style)],
+            [Paragraph('Panels per Sheet:', info_label_style), Paragraph(str(pattern['total_panels']), info_value_style)],
+            [Paragraph('Jobs:', info_label_style), Paragraph(jobs_str, info_value_style)],
+            [Paragraph('Utilization:', info_label_style), Paragraph(f"{pattern['utilization_pct']:.0f}%", info_value_style)],
+            [Paragraph('Waste:', info_label_style), Paragraph(f"{pattern['waste_pct']:.0f}%", info_value_style)]
         ]
         
         # Add drop piece indicator
         if sheet.is_drop:
             if sheet.cost == 0:
-                info_data.insert(1, ['*** FREE DROP ***', 'From Inventory ($0)'])
+                info_data.insert(1, [Paragraph('*** FREE DROP ***', info_label_style), Paragraph('From Inventory ($0)', info_value_style)])
             else:
-                info_data.insert(1, ['DROP PIECE:', f'Cost: ${sheet.cost:.2f}'])
+                info_data.insert(1, [Paragraph('DROP PIECE:', info_label_style), Paragraph(f'Cost: ${sheet.cost:.2f}', info_value_style)])
         
-        info_table = Table(info_data, colWidths=[1.5*inch, 3*inch])
+        # Wider columns for better spacing
+        info_table = Table(info_data, colWidths=[1.8*inch, 3.5*inch])
         info_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#e8e8e8')),
             ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 11),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
         ]))
         elements.append(info_table)
         elements.append(Spacer(1, 0.15*inch))
@@ -765,34 +807,58 @@ def generate_cutting_plan_pdf(cutting_patterns, saw_kerf=0.125, total_cost=0):
         except Exception as e:
             elements.append(Paragraph(f"[Diagram generation error: {e}]", styles['Normal']))
         
-        # Piece Details Table
+        # Piece Details Table with word wrapping
         elements.append(Paragraph("PIECES IN THIS PATTERN:", heading_style))
         
-        piece_data = [['Piece Size', 'Job #', 'Quantity', 'Layout', 'Orientation']]
+        piece_header_style = ParagraphStyle(
+            'PieceHeader',
+            parent=styles['Normal'],
+            fontSize=10,
+            alignment=1,
+            textColor=colors.whitesmoke,
+            fontName='Helvetica-Bold'
+        )
+        
+        piece_cell_style = ParagraphStyle(
+            'PieceCell',
+            parent=styles['Normal'],
+            fontSize=9,
+            alignment=1,
+            leading=11
+        )
+        
+        piece_data = [[
+            Paragraph('Piece Size', piece_header_style),
+            Paragraph('Job #', piece_header_style),
+            Paragraph('Quantity', piece_header_style),
+            Paragraph('Layout', piece_header_style),
+            Paragraph('Orientation', piece_header_style)
+        ]]
+        
         for piece_info in pattern['pieces']:
             piece = piece_info['piece']
             grid = piece_info.get('grid', (1, 1))
             quantity = piece_info.get('quantity', piece_info.get('parts_per_sheet', 0))
             piece_data.append([
-                f"{piece.width}\" × {piece.height}\"",
-                piece.job_number,
-                str(quantity),
-                f"{grid[0]} × {grid[1]}",
-                piece_info.get('orientation', 'Normal')
+                Paragraph(f"{piece.width}\" × {piece.height}\"", piece_cell_style),
+                Paragraph(str(piece.job_number), piece_cell_style),
+                Paragraph(str(quantity), piece_cell_style),
+                Paragraph(f"{grid[0]} × {grid[1]}", piece_cell_style),
+                Paragraph(piece_info.get('orientation', 'Normal'), piece_cell_style)
             ])
         
-        piece_table = Table(piece_data, colWidths=[1.3*inch, 0.8*inch, 0.8*inch, 0.9*inch, 1*inch])
+        # Wider columns with better proportions
+        piece_table = Table(piece_data, colWidths=[1.4*inch, 1.2*inch, 0.9*inch, 0.9*inch, 1.1*inch])
         piece_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f4788')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('FONTSIZE', (0, 1), (-1, -1), 9),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
         ]))
         elements.append(piece_table)
         
